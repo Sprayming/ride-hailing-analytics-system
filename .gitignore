@@ -6,6 +6,9 @@ venv/
 data/*.db
 data/*.sqlite
 
+# 评测运行产物，可按需复现，不入版本库
+eval/nl2sql/reports/
+
 # 个人面试准备文档，不进公开仓库
 student.md
 面试追问坑清单.md

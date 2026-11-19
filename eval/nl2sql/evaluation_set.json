@@ -1,6 +1,7 @@
 {
   "meta": {
     "name": "网约车运营 NL2SQL 评测集",
+    "version": "v1",
     "description": "面向 ride-hailing-analytics-system 的 Text-to-SQL 评测集，用于量化 NL2SQL 准确率（execution accuracy）。所有 gold SQL 均基于真实 schema_sqlite.sql 列名编写，并在可复现种子库上通过校验。",
     "schema_tables": [
       "drivers(id, name, phone, city, register_date, driver_level, status)",

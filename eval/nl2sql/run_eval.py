@@ -19,9 +19,11 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sqlite3
 import sys
+from datetime import datetime
 from pathlib import Path
 
 # 将项目根加入 sys.path，便于导入 scripts / app 包
@@ -89,6 +91,17 @@ def validate_expect(case: dict, rows, cols) -> bool:
     return True  # multi_row: 至少一行即可
 
 
+def dataset_fingerprint(path: Path) -> str:
+    """评测集内容指纹，用于判断两次运行是否可比。"""
+    return hashlib.sha256(path.read_bytes()).hexdigest()[:12]
+
+
+def write_report(path: Path, payload: dict) -> None:
+    """写出机器可读报告，供 evalhub 等下游消费。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 def main():
     parser = argparse.ArgumentParser(description="网约车 NL2SQL 评测")
     parser.add_argument("--eval-file", default=str(ROOT / "eval" / "nl2sql" / "evaluation_set.json"))
@@ -98,6 +111,7 @@ def main():
     parser.add_argument("--orders", type=int, default=800)
     parser.add_argument("--coupons", type=int, default=400)
     parser.add_argument("--with-llm", action="store_true", help="调用真实 NL2SQL 管线计算准确率（需 LLM_API_KEY）")
+    parser.add_argument("--json-out", default=None, help="写出机器可读报告的路径（供 evalhub 消费）")
     args = parser.parse_args()
 
     db_path = Path(args.db)
@@ -111,17 +125,26 @@ def main():
     build_eval_db(db_path, args.seed, args.drivers, args.orders, args.coupons)
     print(f"  评测库: {db_path}")
 
-    cases = json.loads(eval_path.read_text(encoding="utf-8"))["cases"]
+    eval_payload = json.loads(eval_path.read_text(encoding="utf-8"))
+    cases = eval_payload["cases"]
+    evaluation_meta = eval_payload.get("meta", {})
     print(f"  评测用例: {len(cases)} 条")
     print("=" * 64)
 
     # ---- gold SQL 校验 ----
     print("Step 2/2: 校验 gold SQL 正确性")
     gold_pass = 0
+    gold_records = []
     for case in cases:
         rows, cols = run_sql(db_path, case["gold_sql"])
         ok = validate_expect(case, rows, cols)
         gold_pass += 1 if ok else 0
+        gold_records.append({
+            "case_id": case["id"],
+            "category": case.get("category", ""),
+            "question": case.get("question", ""),
+            "passed": bool(ok),
+        })
         status = "OK " if ok else "FAIL"
         preview = ""
         if rows and cols:
@@ -144,6 +167,7 @@ def main():
         print("=" * 64)
         print("真实 NL2SQL 准确率评估（execution accuracy）")
         match = 0
+        llm_raw_records = []
         for case in cases:
             gold_rows, _ = run_sql(db_path, case["gold_sql"])
             gold_sig = result_signature(gold_rows)
@@ -159,6 +183,13 @@ def main():
             pred_sig = result_signature(pred_rows)
             hit = gold_sig == pred_sig
             match += 1 if hit else 0
+            llm_raw_records.append({
+                "case_id": case["id"],
+                "category": case.get("category", ""),
+                "question": case.get("question", ""),
+                "passed": hit,
+                "pred_sql": pred_sql,
+            })
             print(f"  [{'HIT ' if hit else 'MISS'}] {case['id']}: {case['question']}")
             if not hit:
                 print(f"        gold  = {case['gold_sql']}")
@@ -167,8 +198,48 @@ def main():
         acc = match / len(cases) * 100
         print("-" * 64)
         print(f"NL2SQL 执行准确率: {match}/{len(cases)} = {acc:.1f}%")
+        llm_records = [
+            {
+                "case_id": item["case_id"],
+                "category": item.get("category", ""),
+                "question": item.get("question", ""),
+                "passed": item.get("passed", False),
+                "pred_sql": item.get("pred_sql", ""),
+            }
+            for item in llm_raw_records
+        ]
+        model_name = None
+        try:
+            from app.config import settings
+            model_name = settings.llm_model
+        except Exception:  # noqa: BLE001
+            model_name = None
     else:
         print("（未启用 --with-llm，跳过真实 NL2SQL 评估；配置 LLM_API_KEY 后可加 --with-llm 量化准确率）")
+        llm_records = None
+        model_name = None
+
+    if args.json_out:
+        payload = {
+            "generated_at": datetime.now().isoformat(timespec="seconds"),
+            "mode": "with_llm" if args.with_llm else "gold_only",
+            "model": model_name,
+            "dataset": {
+                "name": "ride_nl2sql",
+                "version": (evaluation_meta.get("version") or "unknown"),
+                "sha256": dataset_fingerprint(eval_path),
+                "cases": len(cases),
+                "seed": args.seed,
+            },
+            "metrics": {
+                "gold_pass_rate": gold_pass / len(cases) if cases else None,
+                "execution_accuracy": (match / len(cases)) if args.with_llm and cases else None,
+                "semantic_accuracy": None,
+            },
+            "cases": llm_records if llm_records is not None else gold_records,
+        }
+        write_report(Path(args.json_out), payload)
+        print(f"机器可读报告: {args.json_out}")
 
     print("=" * 64)
     # 退出码：gold 校验必须 100% 通过
