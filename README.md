@@ -1,0 +1,906 @@
+# Ride-Hailing Analytics System
+网约车平台的数据分析运营系统
+
+基于自然语言查询的数据分析系统，面向网约车运营场景。
+用户可以用日常语言问"哪个价位的卡券核销率最高？"，系统自动生成 SQL、查询数据库、分析数据并给出运营建议。
+
+**项目类型**：NL2SQL + 数据分析 Agent（基于 LLM 的智能数据分析平台）
+
+## 系统架构
+
+### 整体架构图
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              用户层 (User Layer)                            │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐        │
+│  │   Web UI    │  │   REST API  │  │   CLI       │  │   SDK       │        │
+│  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘        │
+└─────────┼────────────────┼────────────────┼────────────────┼────────────────┘
+          │                │                │                │
+          ▼                ▼                ▼                ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                            网关层 (Gateway Layer)                           │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │  CORS │ 速率限制 │ 请求验证 │ SQL注入检测 │ 安全头 │ 监控中间件    │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────────────────┘
+          │
+          ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           应用层 (Application Layer)                        │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │                         FastAPI Application                         │   │
+│  ├─────────────┬─────────────┬─────────────┬─────────────┬─────────────┤   │
+│  │  Query API  │ Dashboard   │ History API │  Auth API   │ Monitor API │   │
+│  └──────┬──────┴──────┬──────┴──────┬──────┴──────┬──────┴──────┬──────┘   │
+│         │             │             │             │             │          │
+│         ▼             ▼             ▼             ▼             ▼          │
+│  ┌─────────────┐ ┌─────────┐ ┌───────────┐ ┌───────────┐ ┌───────────┐   │
+│  │   NLSQL     │ │Dashboard│ │  History  │ │   Auth    │ │ Monitoring│   │
+│  │  Module     │ │ Module  │ │  Module   │ │  Module   │ │  Module   │   │
+│  └──────┬──────┘ └────┬────┘ └─────┬─────┘ └─────┬─────┘ └─────┬─────┘   │
+└─────────┼─────────────┼────────────┼─────────────┼─────────────┼──────────┘
+          │             │            │             │             │
+          ▼             ▼            ▼             ▼             ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           核心层 (Core Layer)                               │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │                        Agent Orchestrator                           │   │
+│  │  ┌─────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────┐ │   │
+│  │  │ Planner │───▶│  SQL Tool   │───▶│Analysis Tool│───▶│Report   │ │   │
+│  │  │         │    │             │    │             │    │Tool     │ │   │
+│  │  └─────────┘    └─────────────┘    └─────────────┘    └─────────┘ │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐ ┌─────────────┐          │
+│  │  SQL Gen    │ │  SQL Exec   │ │ Interpreter │ │ Recommender │          │
+│  │  (LLM)     │ │  (Validator)│ │  (LLM)      │ │  (LLM)      │          │
+│  └──────┬──────┘ └──────┬──────┘ └──────┬──────┘ └──────┬──────┘          │
+└─────────┼───────────────┼───────────────┼───────────────┼──────────────────┘
+          │               │               │               │
+          ▼               ▼               ▼               ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                          基础设施层 (Infrastructure Layer)                   │
+│  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐ ┌─────────────┐          │
+│  │   Cache     │ │   Database  │ │   LLM API   │ │   Tasks     │          │
+│  │  (Memory)   │ │ (SQLite/MySQL│ │ (DeepSeek)  │ │ (Background)│          │
+│  └─────────────┘ └─────────────┘ └─────────────┘ └─────────────┘          │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 核心流程（多Agent协作）
+
+```
+                    ┌─────────────────────────────────────┐
+                    │           用户问题                   │
+                    └───────────────┬─────────────────────┘
+                                    │
+                                    ▼
+                    ┌─────────────────────────────────────┐
+                    │      Orchestrator (协调者Agent)      │
+                    │  · 分析任务，制定执行计划            │
+                    │  · 分配任务给专业Agent               │
+                    │  · 整合各Agent结果                   │
+                    └───────────────┬─────────────────────┘
+                                    │
+            ┌───────────────────────┼───────────────────────┐
+            │                       │                       │
+            ▼                       ▼                       ▼
+┌─────────────────────┐ ┌─────────────────────┐ ┌─────────────────────┐
+│    SQL Agent        │ │   Analysis Agent    │ │    Report Agent     │
+│  · 理解业务问题     │ │  · 选择分析方法     │ │  · 确定报告重点     │
+│  · 生成SQL查询      │ │  · 执行数据分析     │ │  · 生成运营建议     │
+│  · 优化查询性能     │ │  · 发现业务洞察     │ │  · 格式化输出       │
+│  · 自主决策采样     │ │  · 评估数据质量     │ │  · 优先级排序       │
+└──────────┬──────────┘ └──────────┬──────────┘ └──────────┬──────────┘
+           │                       │                       │
+           └───────────────────────┼───────────────────────┘
+                                   │
+                                   ▼
+                    ┌─────────────────────────────────────┐
+                    │         Shared Memory (共享记忆)      │
+                    │  · 上下文同步  · 状态共享            │
+                    └───────────────┬─────────────────────┘
+                                   │
+                                   ▼
+                    ┌─────────────────────────────────────┐
+                    │     返回结果（摘要+洞察+建议）       │
+                    └─────────────────────────────────────┘
+```
+
+### 技术栈
+
+| 层级 | 技术 | 说明 |
+|------|------|------|
+| **前端** | HTML/CSS/JS（零外网依赖，原生Canvas图表） | 单页应用：顶部问答搜索框 + 数据仪表盘（`index.html`），离线可用 |
+| **后端** | FastAPI + Uvicorn | 高性能异步Python Web框架 |
+| **AI引擎** | DeepSeek LLM | 可替换为OpenAI/本地模型 |
+| **Agent框架** | 多Agent协作 | 4个Agent自主决策、消息传递、共享记忆 |
+| **数据库** | SQLite (开发) / MySQL (生产) | 双数据库支持 |
+| **缓存** | 内存缓存 (LRU + TTL) | 查询结果缓存，10分钟过期 |
+| **监控** | Prometheus + Grafana | 指标采集 + 可视化仪表盘 |
+| **认证** | JWT + API Key | 双认证方式 |
+| **部署** | Docker + Nginx | 容器化部署，反向代理 |
+
+## 系统特性
+
+### 核心功能
+- **对话式问答（NL2SQL）**：在网页聊天框用日常语言提问，自动生成SQL、查询数据库并返回数据表 + 数据解读 + 运营建议（对标 RAG 问答体验）
+- **智能分析**：LLM驱动的数据解读和业务洞察
+- **运营建议**：基于数据的可执行运营策略
+- **可视化仪表盘**：直观的数据展示和图表（作为次级页 /dashboard）
+
+### 业务功能
+- **真实数据模拟**：模拟网约车运营数据（司机/订单/卡券/核销）
+- **运营报告生成**：自动生成周报/月报（核心指标+趋势分析+运营建议）
+- **异常检测告警**：自动识别订单/金额/核销率异常并告警
+
+### 生产级特性
+- **监控告警**：Prometheus指标采集 + Grafana仪表盘 + 慢请求日志
+- **查询历史**：自动保存查询记录，支持搜索、收藏、分页
+- **数据导出**：支持CSV和JSON格式导出
+- **性能优化**：查询缓存、异步任务、内存LRU淘汰
+- **安全防护**：JWT认证、SQL注入防护、速率限制、输入验证
+
+## 数据模型
+
+- **drivers** — 司机信息（ID、姓名、手机号、注册时间等）
+- **coupon_types** — 卡券类型（面值、有效期、使用条件等）
+- **coupons** — 卡券发放记录（用户、面值、状态、发放时间等）
+- **orders** — 订单记录（司机、乘客、金额、时间等）
+- **redemptions** — 核销记录（卡券、订单、核销时间等）
+
+## 快速开始
+
+### 方式一：本地开发
+
+1. **环境准备**
+   ```bash
+   # 克隆项目
+   git clone <repository-url>
+   cd ride-hailing-analytics-system
+   
+   # 创建虚拟环境
+   python -m venv venv
+   source venv/bin/activate  # Windows: venv\Scripts\activate
+   
+   # 安装依赖
+   pip install -r requirements.txt
+   ```
+
+2. **配置环境**
+   ```bash
+   # 复制环境配置文件
+   cp .env.example .env
+   
+   # 编辑 .env 文件，填入必要配置
+   # - LLM_API_KEY: DeepSeek API密钥
+   # - DB_HOST: 数据库地址（默认127.0.0.1）
+   # - DB_NAME: 数据库名（默认ride_hailing）
+   ```
+
+3. **初始化数据库**
+   ```bash
+   # 创建数据库表
+   python scripts/init_db.py
+   ```
+
+4. **启动服务**
+   ```bash
+   # 启动开发服务器
+   python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8001
+   
+   # 访问应用
+   # - 问答首页(对话式NL2SQL): http://127.0.0.1:8001/
+   # - 数据仪表盘(次级页): http://127.0.0.1:8001/dashboard
+   # - 离线API文档(推荐): http://127.0.0.1:8001/apiview
+   # - Swagger文档(需外网CDN): http://127.0.0.1:8001/docs
+   ```
+
+### 方式二：Docker部署
+
+1. **环境准备**
+   ```bash
+   # 确保已安装Docker和Docker Compose
+   docker --version
+   docker-compose --version
+   ```
+
+2. **配置环境**
+   ```bash
+   cp .env.example .env
+   # 编辑 .env 文件，填入LLM_API_KEY
+   ```
+
+3. **启动服务**
+   ```bash
+   # 构建并启动所有服务
+   docker-compose up -d
+   
+   # 查看日志
+   docker-compose logs -f
+   
+   # 停止服务
+   docker-compose down
+   ```
+
+## API文档
+
+### 认证API
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | /api/auth/register | 用户注册 |
+| POST | /api/auth/login | 用户登录 |
+| GET | /api/auth/me | 获取当前用户信息 |
+| POST | /api/auth/api-key | 创建API密钥 |
+| POST | /api/auth/change-password | 修改密码 |
+
+### 数据分析API
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | /api/query/ | 自然语言查询 |
+| GET | /api/dashboard/ | 仪表盘数据 |
+
+### 查询历史API
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | /api/history/ | 创建查询历史 |
+| GET | /api/history/ | 列出查询历史（分页/搜索） |
+| GET | /api/history/stats | 查询统计 |
+| GET | /api/history/{id} | 获取单条历史 |
+| PUT | /api/history/{id}/favorite | 切换收藏状态 |
+| DELETE | /api/history/{id} | 删除历史 |
+| GET | /api/history/export/{format} | 导出（csv/json） |
+
+### 监控API
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | /api/monitoring/metrics | Prometheus指标 |
+| GET | /api/monitoring/health | 健康检查 |
+| GET | /api/monitoring/stats | 应用统计 |
+
+### 任务API
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | /api/tasks/ | 列出任务 |
+| GET | /api/tasks/{id} | 获取任务状态 |
+| DELETE | /api/tasks/{id} | 取消任务 |
+| POST | /api/tasks/cleanup | 清理过期任务 |
+
+### 运营报告API
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | /api/report/generate | 生成运营报告（week/month） |
+| GET | /api/report/metrics | 获取核心指标 |
+| GET | /api/report/trend | 获取趋势数据 |
+| GET | /api/report/coupon-analysis | 卡券分析 |
+| GET | /api/report/top-drivers | TOP司机排名 |
+| GET | /api/report/hourly-distribution | 时段分布 |
+
+### 异常检测API
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | /api/anomaly/detect | 检测所有异常 |
+| GET | /api/anomaly/summary | 异常摘要 |
+| GET | /api/anomaly/health | 系统健康检查 |
+
+### 查询示例
+
+```bash
+# 自然语言查询
+curl -X POST "http://127.0.0.1:8001/api/query/" \
+  -H "Content-Type: application/json" \
+  -d '{"question": "哪个价位的卡券核销率最高？"}'
+
+# 带认证的查询
+curl -X POST "http://127.0.0.1:8001/api/query/" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <your-token>" \
+  -d '{"question": "最近30天哪个司机的订单量最多？"}'
+```
+
+## 项目结构
+
+```
+ride-hailing-analytics-system/
+├── app/                          # 应用代码
+│   ├── api/                     # API路由层
+│   │   ├── auth.py              # 认证API（注册/登录/API密钥）
+│   │   ├── dashboard.py         # 仪表盘API
+│   │   ├── history.py           # 查询历史API（CRUD/导出）
+│   │   ├── query.py             # 核心查询API
+│   │   ├── tasks.py             # 异步任务API
+│   │   ├── report.py            # 运营报告API
+│   │   └── anomaly.py           # 异常检测API
+│   ├── auth/                    # 认证模块
+│   │   ├── database.py          # 用户数据库（SQLite）
+│   │   ├── dependencies.py      # FastAPI依赖注入
+│   │   ├── jwt_handler.py       # JWT令牌管理
+│   │   └── models.py            # 用户模型
+│   ├── cache/                   # 缓存模块
+│   │   └── redis_cache.py       # 内存缓存（LRU + TTL）
+│   ├── history/                 # 查询历史模块
+│   │   ├── database.py          # 历史数据库
+│   │   └── models.py            # 历史模型
+│   ├── monitoring/              # 监控模块
+│   │   ├── metrics.py           # Prometheus指标
+│   │   └── middleware.py        # 监控中间件
+│   ├── report/                  # 运营报告模块
+│   │   └── generator.py         # 报告生成器
+│   ├── anomaly/                 # 异常检测模块
+│   │   └── detector.py          # 异常检测器
+│   ├── security/                # 安全模块
+│   │   ├── error_handlers.py    # 统一错误处理
+│   │   ├── middleware.py         # 安全中间件
+│   │   └── validators.py        # 输入验证
+│   ├── nlsql/                   # 自然语言转SQL
+│   │   ├── schema_parser.py     # 数据库Schema解析
+│   │   ├── sql_executor.py      # SQL执行与校验
+│   │   └── sql_generator.py     # LLM生成SQL
+│   ├── analysis/                # 数据分析
+│   │   ├── interpreter.py       # LLM数据解读
+│   │   └── recommender.py       # LLM运营建议
+│   ├── agent/                   # 多Agent协作框架
+│   │   ├── base.py              # Agent基类、共享记忆、消息传递
+│   │   ├── agents.py            # 专业Agent（SQL/Analysis/Report）
+│   │   ├── orchestrator.py      # 多Agent协调器
+│   │   ├── planner.py           # LLM问题拆解（兼容）
+│   │   └── tools/               # 工具集（兼容）
+│   ├── tasks/                   # 异步任务
+│   │   └── background.py        # 后台任务管理
+│   ├── db/                      # 数据库连接
+│   │   └── connection.py        # SQLite连接管理
+│   ├── static/                  # 静态文件（均零外网依赖）
+│   │   ├── index.html           # 单页前端：顶部问答搜索框 + 数据仪表盘（/，原生Canvas图表）
+│   │   └── apidocs.html         # 离线自包含 API 文档页（/apiview，不依赖外网CDN）
+│   ├── config.py                # 应用配置
+│   ├── models.py                # Pydantic数据模型
+│   └── main.py                  # 应用入口
+├── data/                        # 数据文件
+│   ├── schema.sql               # MySQL表结构
+│   ├── schema_sqlite.sql        # SQLite表结构
+│   └── *.db                     # SQLite数据库文件
+├── monitoring/                  # 监控配置
+│   ├── prometheus.yml           # Prometheus配置
+│   └── grafana/                 # Grafana配置
+│       ├── datasources.yml      # 数据源配置
+│       ├── dashboards.yml       # 仪表盘配置
+│       └── dashboards/          # 仪表盘JSON
+├── scripts/                     # 脚本工具
+│   ├── init_db.py               # 数据库初始化
+│   └── generate_data.py         # 数据模拟生成器
+├── eval/                        # 评测集
+│   └── nl2sql/                  # NL2SQL 评测集（22条 gold SQL）
+│       ├── evaluation_set.json  # 中文问题 + gold SQL + 结果断言
+│       └── run_eval.py          # 执行准确率评测脚本
+├── tests/                       # 测试代码（66个测试）
+│   ├── conftest.py              # pytest fixtures
+│   ├── test_api.py              # API测试
+│   ├── test_config.py           # 配置测试
+│   ├── test_models.py           # 模型测试
+│   ├── test_nlsql.py            # SQL生成测试
+│   ├── test_security.py         # 安全测试
+│   └── test_nl2sql_eval.py      # 评测集真实DB端到端测试（22条）
+├── Dockerfile                   # Docker镜像配置
+├── docker-compose.yml           # Docker Compose（5服务）
+├── nginx.conf                   # Nginx反向代理配置
+├── pytest.ini                   # pytest配置
+├── requirements.txt             # Python依赖
+├── .env.example                 # 环境变量模板
+└── README.md                    # 项目文档
+```
+
+### Docker 服务架构
+
+```yaml
+services:
+  app:        # FastAPI应用 (端口 8001)
+  db:         # MySQL 8.0 (端口 3306)
+  nginx:      # 反向代理 (端口 80)
+  prometheus: # 指标采集 (端口 9090)
+  grafana:    # 监控仪表盘 (端口 3000)
+```
+
+## 测试
+
+项目包含 **66 个测试用例**（44 原有 + 22 评测），覆盖核心模块：
+
+| 测试文件 | 测试数 | 覆盖模块 |
+|----------|--------|----------|
+| test_config.py | 3 | 配置加载、环境变量、验证 |
+| test_models.py | 10 | Pydantic数据模型 |
+| test_nlsql.py | 15 | SQL生成、Schema解析、SQL安全校验 |
+| test_api.py | 7 | API接口（mock测试） |
+| test_security.py | 9 | SQL注入攻击、输入验证 |
+| test_nl2sql_eval.py | 22 | NL2SQL 评测集**真实 DB 端到端执行**（项目内唯一走真实 SQLite 的集成测试） |
+
+```bash
+# 运行所有测试
+pytest
+
+# 运行指定模块测试
+pytest tests/test_nlsql.py -v
+
+# 运行带覆盖率的测试
+pytest --cov=app --cov-report=html
+
+# 查看测试报告
+# 打开 htmlcov/index.html
+```
+
+## 配置说明
+
+### 环境变量
+
+| 变量名 | 说明 | 默认值 |
+|--------|------|--------|
+| DB_HOST | 数据库地址 | 127.0.0.1 |
+| DB_PORT | 数据库端口 | 3306 |
+| DB_NAME | 数据库名 | ride_hailing |
+| DB_USER | 数据库用户 | root |
+| DB_PASSWORD | 数据库密码 | |
+| LLM_API_KEY | LLM API密钥 | |
+| LLM_BASE_URL | LLM API地址 | https://api.deepseek.com/v1 |
+| LLM_MODEL | LLM模型名 | deepseek-chat |
+| LLM_TEMPERATURE | 生成温度 | 0.05 |
+| DEBUG | 调试模式 | true |
+
+### LLM配置
+
+系统支持多种LLM提供商，只需修改以下配置：
+- **DeepSeek**: `LLM_BASE_URL=https://api.deepseek.com/v1`
+- **OpenAI**: `LLM_BASE_URL=https://api.openai.com/v1`
+- **本地模型**: `LLM_BASE_URL=http://localhost:11434/v1`
+
+## 开发指南
+
+### 添加新功能
+
+1. 在 `app/` 下创建新模块
+2. 在 `app/api/` 中添加路由
+3. 在 `app/main.py` 中注册路由
+4. 编写测试用例
+5. 更新文档
+
+### 代码规范
+
+- 遵循 PEP 8 代码风格
+- 使用类型注解
+- 编写文档字符串
+- 添加单元测试
+
+## 常见问题
+
+### 1. 数据库连接失败
+- 检查数据库服务是否启动
+- 确认 `.env` 中的数据库配置
+- 确保数据库已创建并导入schema
+
+### 2. LLM API调用失败
+- 检查API密钥是否正确
+- 确认网络连接正常
+- 检查API额度是否充足
+
+### 3. 端口被占用
+```bash
+# 查找占用端口的进程
+netstat -ano | findstr :8001
+
+# 终止进程
+taskkill /PID <进程ID> /F
+```
+
+## 项目演进
+
+本项目从原型到多Agent协作，经历了五个版本迭代：
+
+```
+v0.1.0 (原型) ──▶ v0.2.0 (准生产) ──▶ v0.3.0 (生产级) ──▶ v0.4.0 (业务) ──▶ v0.5.0 (多Agent)
+     │                   │                    │                  │                  │
+     ▼                   ▼                    ▼                  ▼                  ▼
+  基础功能           P0+P1改进              P2改进            业务功能          多Agent协作
+  · NL2SQL          · 测试 (44个)          · 监控告警        · 数据模拟        · 4个自主Agent
+  · 数据分析         · 安全加固             · 查询历史        · 运营报告        · 共享记忆
+  · Agent编排        · 用户认证             · 数据导出        · 异常检测        · 消息传递
+                    · Docker部署           · 可视化增强                        · 自主决策
+                    · 前端界面             · 性能优化                          · Agent状态
+                    · API文档
+```
+
+### 版本对比
+
+| 特性 | v0.1.0 | v0.2.0 | v0.3.0 | v0.4.0 | v0.5.0 |
+|------|--------|--------|--------|--------|--------|
+| **核心查询** | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Agent架构** | 单Agent | 单Agent | 单Agent | 单Agent | **多Agent** |
+| **测试** | ❌ | ✅ 44个 | ✅ 44个 | ✅ 44个 | ✅ 44个 |
+| **安全中间件** | ❌ | ✅ 4个 | ✅ 4个 | ✅ 4个 | ✅ 4个 |
+| **用户认证** | ❌ | ✅ JWT | ✅ JWT | ✅ JWT | ✅ JWT |
+| **Docker** | ❌ | ✅ 3服务 | ✅ 5服务 | ✅ 5服务 | ✅ 5服务 |
+| **监控** | ❌ | ❌ | ✅ Prometheus | ✅ Prometheus | ✅ Prometheus |
+| **查询历史** | ❌ | ❌ | ✅ | ✅ | ✅ |
+| **数据导出** | ❌ | ❌ | ✅ CSV/JSON | ✅ CSV/JSON | ✅ CSV/JSON |
+| **数据模拟** | ❌ | ❌ | ❌ | ✅ | ✅ |
+| **运营报告** | ❌ | ❌ | ❌ | ✅ 周报/月报 | ✅ 周报/月报 |
+| **异常检测** | ❌ | ❌ | ❌ | ✅ 6种 | ✅ 6种 |
+| **Agent数量** | 1个 | 1个 | 1个 | 1个 | **4个** |
+| **自主决策** | ❌ | ❌ | ❌ | ❌ | **✅** |
+| **共享记忆** | ❌ | ❌ | ❌ | ❌ | **✅** |
+| **API端点** | 2个 | 8个 | 20+个 | 30+个 | **35+个** |
+
+### 改进优先级说明
+
+项目采用 P0/P1/P2 + 业务功能 四级优先级进行改进：
+
+- **P0（必须）**：测试、安全、错误处理 — 直接影响生产可用性
+- **P1（重要）**：认证、文档、部署、前端 — 影响用户体验和运维
+- **P2（优化）**：监控、历史、可视化、性能 — 提升系统质量和效率
+- **业务功能**：数据模拟、运营报告、异常检测 — 贴近实际运营场景
+
+## NL2SQL 评测集
+
+> 用于**量化** NL2SQL 能力——这是项目里唯一走真实 SQLite 端到端执行的测试，也是面试时能拿出实打实数字的依据。
+
+### 为什么需要
+
+- 之前没有任何评测集，NL2SQL 准确率、复杂 join 能力全靠嘴说，被追问无法量化。
+- 采用**执行准确率（Execution Accuracy）**：比较生成 SQL 与 gold SQL 在数据库上的**执行结果集合**是否相等，而非 SQL 字符串匹配（对空格/别名/等价写法更鲁棒）。
+
+### 文件
+
+- `eval/nl2sql/evaluation_set.json`：22 条中文运营问题 + gold SQL + 结果形态断言。
+  - 8 类题型覆盖难度阶梯：单表聚合 4 / 条件过滤 4 / 多表 JOIN 4 / 时间过滤 2 / TopN 2 / 核销率计算 2 / 子查询或 CTE 2 / 维度下钻（城市、司机等级）2。
+  - gold SQL 严格对齐真实列名（`order_time` / `order_amount` / `face_value` / `issued_at` 等）。
+- `eval/nl2sql/run_eval.py`：用可复现 `--seed` 生成**独立评测库**（不污染业务库 `data/ride_hailing.db`，产物 `data/eval_nl2sql.db` 已被 `.gitignore` 的 `data/*.db` 忽略）；采用 DROP+CREATE 重建保证可复现；无 key 时仅校验 gold SQL 正确性（CI 可跑），`--with-llm` 时跑真实 NL2SQL 准确率。
+- `tests/test_nl2sql_eval.py`：纳入 pytest，保证评测集 gold SQL 本身正确、形态符合预期。
+
+### 用法
+
+```bash
+# 校验评测集 gold SQL（无需 LLM key）
+python eval/nl2sql/run_eval.py --seed 42 --drivers 60 --orders 800 --coupons 400
+
+# 跑真实 NL2SQL 准确率（需要在 .env 中配置 LLM_API_KEY）
+python eval/nl2sql/run_eval.py --with-llm --seed 42 --drivers 60 --orders 800 --coupons 400
+
+# 纳入 pytest
+pytest tests/test_nl2sql_eval.py
+```
+
+### 结果与价值
+
+- 22 条 gold SQL 全部可执行且形态正确（100%）。
+- 评测集曾**当场抓出一个真实 bug**：Q19（核销率高于整体的券种）的 CTE 里算整体核销率漏乘 `*100`，内外层百分比单位不一致，导致 `HAVING` 把低于整体的券种也错误返回；修正后才只返回真正高于整体的券种。这正是"有评测才能发现"的体现。
+- 当前测试数 **44 → 66**（44 原有 + 22 评测），全部通过。
+- **真实 NL2SQL 端到端执行准确率：15/22 = 68.2%**（2026-08-16 用 `.env` 配置的 `deepseek-v4-pro` 真实调用跑通，`--with-llm`；gold SQL 校验 100% 通过）。逐维度命中率与未命中归因、后续改进见下方「更新日志 → v0.7.0」。若放宽"仅比对核心指标列"的评测口径，语义准确率约 19/22 ≈ 86%。
+
+## 更新日志
+
+### v0.7.0 (2026-08-16) — NL2SQL 真实执行准确率评测
+
+用 `--with-llm` 真实调用 LLM（`.env` 配置的 `deepseek-v4-pro`）跑通 22 题执行准确率评测，gold SQL 校验 100% 通过。结果如下：
+
+- **核心指标：NL2SQL 执行准确率 15/22 = 68.2%**
+  - 评测方法：Execution Accuracy——生成 SQL 与 gold SQL 在**同一份可复现数据**（seed=42，60 司机 / 800 订单 / 400 卡券）上执行，比较结果集（忽略行顺序、忽略列名，比对数据值）。
+  - 复现命令：`python eval/nl2sql/run_eval.py --with-llm --seed 42 --drivers 60 --orders 800 --coupons 400`
+- **分维度命中率**：
+
+  | 能力维度 | 命中 / 总数 | 命中率 |
+  | --- | --- | --- |
+  | 条件过滤 filtering | 4 / 4 | 100.0% |
+  | 多表关联 join | 3 / 3 | 100.0% |
+  | 单表聚合 single_table_aggregation | 3 / 4 | 75.0% |
+  | 时间过滤 time_filter | 1 / 2 | 50.0% |
+  | TopN 排名 topn | 1 / 2 | 50.0% |
+  | 核销率 redemption_rate | 1 / 3 | 33.3% |
+  | 子查询 subquery | 1 / 2 | 50.0% |
+  | 维度下钻 dimension | 1 / 2 | 50.0% |
+
+  最强：条件过滤、多表关联（满分）；最弱：核销率、时间过滤、TopN、子查询、维度下钻（均与"是否对所有订单统计"相关）。
+
+- **未命中逐题归因（7 题）**：
+
+  | 题号 | 问题 | 性质 | 说明 |
+  | --- | --- | --- | --- |
+  | Q04 | 金额最高的那笔订单是多少 | 评测口径严 | 模型返回"整行订单"，gold 只取 MAX 标量；语义更完整，但结果集列数不同被判 MISS |
+  | Q09 | 最近 7 天的订单总金额 | **真·模型缺陷** | 额外加 `AND status='completed'`，gold 统计全部订单 |
+  | Q13 | 各卡券类型分别核销多少张 | 评测口径严 | 多 SELECT 了 `ct.id` 一列，核销计数正确 |
+  | Q14 | 金额最高前 5 名司机 | **真·模型缺陷** | 额外加 `WHERE status='completed'`，gold 统计全部订单 |
+  | Q16 | 各卡券类型核销率 | 评测口径严 | 多 SELECT 了"发放数/核销数"列，核销率计算等价 |
+  | Q19 | 核销率高于平均的类型 | 评测口径严 | 等价 CTE 改写，结果语义一致、形态不同被判 MISS |
+  | Q21 | 各司机等级平均订单金额 | **真·模型缺陷** | 额外加 `WHERE status='completed'`，gold 统计全部订单 |
+
+  - 真·模型缺陷 3 题（Q09/Q14/Q21）：模型把"订单金额/排名/平均"默认当成"已完成订单金额"，对金额类聚合**过度加 `status='completed'` 过滤**。
+  - 评测口径偏严 4 题（Q04/Q13/Q16/Q19）：生成的 SQL 语义正确，仅因结果集多了列 / 整行 vs 标量 / 等价 CTE 改写而被判不命中。若放宽比对口径，语义准确率约 **19/22 ≈ 86%**。
+
+- **后续改进（待落地）**：
+  1. **修"金额=已完成"过度过滤**：在 `app/nlsql/sql_generator.py` 的 `SYSTEM_PROMPT` 明确——"订单金额 / 总金额 / 平均金额 / 排名"除非问题点名"已完成 / 已支付"，否则统计**全部订单**；仅"完成单数 / 完成率"才加 `status='completed'`。预期可收回 Q09/Q14/Q21（+3 题 → 81.8%）。
+  2. **评测口径升级（可选）**：`eval/nl2sql/run_eval.py` 的 `result_signature` 支持"仅比对问题所求核心列"，区分"列数多余"与"数值错误"，让基准更公平、避免误伤正确 SQL。
+  3. **扩充边界用例**：跨城市 TopN、环比 / 同比、空值处理，提升基准集区分度。
+
+### v0.6.1 (2026-08-11) — 离线 API 文档与可用性修复
+
+- 新增 **`/apiview` 离线自包含 API 文档页**（`app/static/apidocs.html`）：内嵌 CSS/JS，仅 fetch 同源 `/openapi.json` 渲染，支持按方法着色、参数表、搜索、"试一试"发请求。**不依赖任何外网 CDN**，解决 WorkBuddy 预览面板 / 内网 / 离线环境下标准 `/docs`（Swagger UI）空白的问题。
+- 修复被另一台电脑自动同步**回退**的 schema 漂移：`scripts/generate_data.py`、`app/api/dashboard.py`、`app/anomaly/detector.py`、`app/report/generator.py` 列名对齐（`order_time` / `order_amount` / `face_value` / `issued_at` 等），pytest 66 全过。
+
+### v0.6.0 (2026-08-10) — NL2SQL 评测集
+
+- 新增 `eval/nl2sql/`：22 条中文运营问题 + gold SQL 评测集 + 执行准确率评测脚本 `run_eval.py`。
+- 新增 `tests/test_nl2sql_eval.py`：项目内唯一走真实 SQLite 端到端执行的集成测试。
+- 测试数 **44 → 66**，全部通过。
+- 详见上方「NL2SQL 评测集」章节。
+
+### v0.5.0 (2026-08-05) — 多Agent协作架构
+
+从单Agent+多工具架构升级为真正的多Agent协作架构，实现Agent间自主决策和协作。
+
+#### 🤖 多Agent协作框架
+- 新增 `app/agent/base.py` — Agent基类和协作基础设施：
+  - `BaseAgent` 抽象基类（自主决策、工具调用、消息处理）
+  - `OrchestratorAgent` 协调者（任务分配、结果整合）
+  - `SharedMemory` 共享记忆（上下文同步、状态共享）
+  - `Message` 消息类（Agent间通信、事件驱动）
+  - `MessageType` 枚举（TASK/RESULT/QUERY/FEEDBACK/ERROR/STATUS）
+
+#### 🧠 专业Agent实现
+- 新增 `app/agent/agents.py` — 3个专业Agent：
+  - **SQLAgent**：自主决策SQL生成和优化
+    - 分析查询策略（直接/对比/排名/聚合）
+    - 自主决定是否优化SQL
+    - 自主决定结果采样
+  - **AnalysisAgent**：自主决策分析角度和方法
+    - 选择分析方法（趋势/分布/异常/排名/汇总）
+    - 自主决定是否深入分析
+    - 评估数据质量
+  - **ReportAgent**：自主决策报告结构和重点
+    - 确定报告焦点（优惠券/司机/订单/洞察）
+    - 生成运营建议
+    - 建议优先级排序
+    - 计算置信度
+
+#### 🔄 协调器升级
+- 重写 `app/agent/orchestrator.py` — 多Agent协调器：
+  - `MultiAgentOrchestrator` 类
+  - 注册和管理多个Agent
+  - 消息队列和日志
+  - Agent执行轨迹追踪
+  - 兼容旧接口
+
+#### 🔌 API扩展
+- 更新 `app/api/query.py` — 新增多Agent API：
+  - `POST /api/query/multi-agent` — 多Agent协作查询
+  - `GET /api/query/agent-status` — Agent系统状态
+
+### v0.4.0 (2026-08-05) — 业务功能增强
+
+基于网约车数据运营实际场景，新增数据模拟、运营报告、异常检测三大业务功能。
+
+#### 📊 真实数据模拟
+- 新增 `scripts/generate_data.py` — 网约车运营数据生成器：
+  - 支持自定义：天数（`--days`）、司机数（`--drivers`）、订单数（`--orders`）、卡券数（`--coupons`）
+  - 生成数据：司机信息、卡券类型、卡券发放记录、订单记录、核销记录
+  - 真实模拟：城市分布、时段高峰、金额分布、核销率、司机等级
+  - 使用示例：`python scripts/generate_data.py --days 30 --drivers 100 --orders 5000`
+
+#### 📈 运营报告自动生成
+- 新增 `app/report/generator.py` — 运营报告生成器：
+  - 核心指标：订单数/金额/完成率/卡券使用率
+  - 趋势分析：近7天订单/金额/司机趋势
+  - 卡券分析：各类型核销率对比
+  - TOP司机：按金额排名
+  - 时段分布：24小时订单分布
+  - 运营建议：基于数据的策略建议
+- 新增 `app/api/report.py` — 6 个 API：
+  - `GET /api/report/generate` — 生成运营报告（支持 week/month）
+  - `GET /api/report/metrics` — 获取核心指标
+  - `GET /api/report/trend` — 获取趋势数据
+  - `GET /api/report/coupon-analysis` — 卡券分析
+  - `GET /api/report/top-drivers` — TOP司机排名
+  - `GET /api/report/hourly-distribution` — 时段分布
+
+#### 🚨 异常检测与告警
+- 新增 `app/anomaly/detector.py` — 异常检测器：
+  - 检测类型：订单下降/金额下降/核销率下降/司机下降/异常激增/低核销率
+  - 异常级别：INFO / WARNING / CRITICAL
+  - 阈值配置：可自定义各指标告警阈值
+- 新增 `app/api/anomaly.py` — 3 个 API：
+  - `GET /api/anomaly/detect` — 检测所有异常
+  - `GET /api/anomaly/summary` — 异常摘要
+  - `GET /api/anomaly/health` — 系统健康检查
+
+### v0.3.0 (2026-08-05) — 生产级增强
+
+在 v0.2.0 基础上新增监控、历史、可视化、性能优化四大模块。
+
+#### 📊 监控告警（P2）
+- 新增 `app/monitoring/metrics.py` — Prometheus 指标采集：
+  - 请求计数器/延迟直方图（`app_requests_total`, `app_request_latency_seconds`）
+  - SQL 查询计数器/延迟（`app_sql_queries_total`, `app_sql_query_latency_seconds`）
+  - LLM 调用计数器/延迟/Token 用量（`app_llm_calls_total`, `app_llm_tokens_total`）
+  - 系统资源指标（CPU / 内存 / 磁盘使用率）
+  - 健康检查端点（`/api/monitoring/health`）+ 应用统计端点（`/api/monitoring/stats`）
+- 新增 `app/monitoring/middleware.py` — 监控中间件 + 慢请求日志（>2s 告警）
+- 新增 `monitoring/prometheus.yml` — Prometheus 采集配置
+- 新增 `monitoring/grafana/` — Grafana 数据源 + 仪表盘自动配置
+- 更新 `docker-compose.yml` — 新增 Prometheus（9090）+ Grafana（3000）服务
+
+#### 📋 查询历史 & 数据导出（P2）
+- 新增 `app/history/` 查询历史模块：
+  - `models.py` — QueryHistory / QueryHistoryCreate / ExportFormat 模型
+  - `database.py` — SQLite 查询历史表 + CRUD 操作 + 统计接口
+- 新增 `app/api/history.py` — 7 个 API：
+  - 创建/列表/详情/收藏切换/删除查询历史
+  - 查询统计端点（总查询数/成功率/平均延迟/今日查询数）
+  - CSV / JSON 数据导出（支持指定记录、元数据开关）
+
+#### 📈 数据可视化增强（P2）
+- 重写 `app/static/index.html` — 四 Tab 布局：
+  - **仪表盘** — 统计卡片（带趋势指标）+ 今日查询趋势图 + 状态分布图
+  - **智能查询** — 保留原有查询功能
+  - **数据图表** — 4 种图表：卡券面值饼图、核销趋势折线图、订单金额柱状图、司机活跃度雷达图
+  - **查询历史** — 历史列表 + 搜索 + 收藏 + 分页 + CSV/JSON 导出按钮
+  - Tab 切换、防抖搜索、移动端适配
+
+#### ⚡ 性能优化（P2）
+- 新增 `app/cache/redis_cache.py` — 内存缓存实现：
+  - LRU 淘汰策略 + TTL 过期
+  - 查询结果缓存（`QueryCache`）— 默认 10 分钟过期，最大 500 条
+  - 缓存命中率统计
+  - `@cached_query` 装饰器
+- 新增 `app/tasks/background.py` — 异步任务管理器：
+  - `TaskManager` — 任务提交/状态查询/列表/清理
+  - `TaskStatus` 枚举（pending / running / completed / failed）
+  - 示例任务（长时间查询、数据导出、缓存预热）
+- 新增 `app/api/tasks.py` — 任务 API：列出/查询/取消/清理任务
+
+### v0.2.0 (2026-08-04) — 从原型到准生产
+
+从原型/Demo级别提升到接近生产可用，共新增 50+ 文件，44 个测试全部通过。
+
+#### 🧪 测试（P0）
+- 配置 pytest 框架（`pytest.ini` + `conftest.py`）
+- 新增 44 个测试用例，覆盖 5 个模块：
+  - `tests/test_config.py` — 配置加载与环境变量（3 个）
+  - `tests/test_models.py` — Pydantic 数据模型验证（10 个）
+  - `tests/test_nlsql.py` — SQL 生成、Schema 解析、SQL 安全校验（15 个）
+  - `tests/test_api.py` — API 接口 mock 测试（7 个）
+  - `tests/test_security.py` — SQL 注入攻击模拟、输入验证（9 个）
+
+#### 🔒 安全（P0）
+- 新增 `app/security/middleware.py` — 4 个安全中间件：
+  - `SecurityHeadersMiddleware` — X-Content-Type-Options, CSP 等安全响应头
+  - `RequestSizeLimitMiddleware` — 请求体大小限制（1MB）
+  - `RateLimitMiddleware` — 基于 IP 的速率限制（60 次/分钟）
+  - `SQLInjectionMiddleware` — 危险 SQL 模式检测
+- 新增 `app/security/validators.py` — 输入净化、文件名校验、SQL 注入检测、API 密钥格式验证
+- 新增 `app/security/error_handlers.py` — 统一错误处理框架：
+  - `AppError` 基类 + 5 个子类（ValidationError, NotFoundError, DatabaseError, LLMError, SecurityError）
+  - 全局异常处理器（AppError / HTTPException / Exception）
+
+#### 🛡️ 错误处理（P0）
+- 重写 `app/api/query.py` — 分层异常处理（输入验证 → SQL生成 → SQL执行 → 数据分析 → 建议生成）
+- 重写 `app/main.py` — 注册安全中间件 + 错误处理器 + 应用生命周期管理
+
+#### 👤 用户认证（P1）
+- 新增 `app/auth/` 认证模块：
+  - `models.py` — UserCreate, UserLogin, Token, PasswordChange 等 Pydantic 模型
+  - `database.py` — SQLite 用户表 + API 密钥表 + 密码哈希（SHA256+盐）
+  - `jwt_handler.py` — JWT 令牌创建/验证
+  - `dependencies.py` — FastAPI 依赖注入（get_current_user, get_current_admin_user 等）
+- 新增 `app/api/auth.py` — 5 个认证 API：注册、登录、用户信息、创建 API 密钥、修改密码
+
+#### 📖 API 文档（P1）
+- 配置 Swagger UI（`/docs`）和 ReDoc（`/redoc`）
+- 所有 API 端点添加中文说明和标签
+
+#### 🐳 Docker 部署（P1）
+- 新增 `Dockerfile` — Python 3.11 基础镜像 + uvicorn
+- 新增 `docker-compose.yml` — 三服务架构：
+  - `app` — FastAPI 应用（端口 8001）
+  - `db` — MySQL 8.0（端口 3306）+ schema 自动初始化
+  - `nginx` — 反向代理（端口 80）+ 安全头 + 请求限制
+- 新增 `nginx.conf` — 反向代理配置
+- 新增 `.dockerignore` — 构建排除规则
+
+#### 🎨 前端数据可视化（P1）
+- 新增 `app/static/index.html` — 完整响应式 Web 界面：
+  - 仪表盘卡片（总卡券数 / 核销数 / 核销率）
+  - 智能查询输入框（支持回车提交）
+  - Chart.js 图表（卡券面值饼图 + 核销趋势折线图）
+  - 查询结果展示（摘要 / 洞察 / 建议 / SQL / 数据表格）
+  - 移动端适配
+
+#### 📝 文档
+- 重写 `README.md`：
+  - 系统特性 / 技术架构 / 安全特性
+  - 快速开始（本地开发 + Docker 部署）
+  - 完整 API 文档（认证 API + 数据分析 API）
+  - 项目结构 / 测试说明 / 配置说明 / 开发指南 / 常见问题
+
+### v0.1.0 (2026-07-20)
+- 🎉 初始版本发布
+- ✅ 基础自然语言查询功能（DeepSeek LLM）
+- ✅ SQL 自动生成与安全校验
+- ✅ 数据分析与运营建议
+- ✅ Agent 编排（Planner → SQLTool → AnalysisTool → ReportTool）
+- ✅ 仪表盘 API
+
+## 踩坑记录与复盘（真实记录）
+
+> 以下均为项目演进中**真实踩过**的坑，如实记录，供面试复盘与后人避坑。每条都给出「现象 / 根因 / 故障点 / 修复 / 教训」。
+
+### 1. Schema 列名漂移（最严重）
+
+- **现象**：数据模拟、异常检测、运营报告、仪表盘全部失效。`generate_data.py` 报 `coupon_types has no column named value`；`/api/anomaly/health` 报 `no such column: order_date`；`/api/report/*` 报 `no such column: amount` / `ct.value`。
+- **根因**：`data/schema_sqlite.sql` 把列名从 `order_date→order_time`、`amount→order_amount`、`value→face_value`、`issue_date→issued_at`、`validity_days→valid_days` 改了，但消费方代码没同步；且一次修复提交本身还漏改了几处 `amount` / `ct.value`。
+- **故障点**：`scripts/generate_data.py`、`app/anomaly/detector.py`、`app/report/generator.py`、`app/api/dashboard.py`。
+- **修复**：统一对齐真实列名；`generator.py` 补改 4 处 `SUM(amount)→SUM(order_amount)`、3 处 `ct.value→ct.face_value`。
+- **教训**：Schema 是契约，改名必须全量 grep 校验所有引用；单测 mock 发现不了（见下条）。
+
+### 2. 44 个测试全绿 ≠ 系统可用
+
+- **现象**：CI 全绿，实际启动后接口全是空壳 / 报错。
+- **根因**：44 个测试全部 mock 数据库，没走真实 SQLite，掩盖了 schema 契约不一致。
+- **修复**：新增 `tests/test_nl2sql_eval.py` 用真实库端到端执行（测试数 44→66），大改后必做手动冒烟。
+- **教训**：核心链路必须有至少一条真实 DB 的集成测试 + 手动冒烟。
+
+### 3. .env 不进版本库
+
+- **现象**：跨机器 `git pull` 后 LLM / NL2SQL 功能 500。
+- **根因**：`.env` 被 `.gitignore` 忽略，不随仓库同步（这是正确的安全做法）。
+- **规避**：每台机器 `cp .env.example .env` 填 `LLM_API_KEY`；接口无 key 时优雅降级（明确错误提示）。
+- **教训**：密钥不入库正确，但要在 README 写清初始化步骤，避免"拉下来跑不起来"。
+
+### 4. "多Agent协作"早期名实不符
+
+- **现象**：v0.1~v0.4 自称多Agent，实为固定顺序流水线（Orchestrator 串行调工具）。
+- **根因**：架构演进分期，命名超前于实现。
+- **修复**：v0.5.0 真落地 Orchestrator + 3 专业化 Agent（SQL / Analysis / Report）+ SharedMemory 共享黑板。
+- **教训**：面试如实说明演进，不夸大；能讲清"为什么需要协作、各 Agent 职责边界"比名头重要。
+
+### 5. README 表格 CJK + emoji 宽度错位
+
+- **现象**：Markdown 表格里 ✅/❌ 与中文混排，列对不齐。
+- **根因**：emoji 与 CJK 字符显示宽度不一致。
+- **修复**：改用等宽代码块表 + 固定宽度符号 `✓` / `✗`。
+- **教训**：对不齐就用等宽字体 + 定宽符号。
+
+### 6. 旧进程占端口误测旧代码
+
+- **现象**：改了代码但接口行为没变，以为没生效。
+- **根因**：上一次 `uvicorn` 进程没杀，占着 8001，新进程起不来或打到了旧实例。
+- **修复**：`netstat -ano | findstr :8001` 找 PID，`taskkill /PID <pid> /F` 强杀后再复验。
+- **教训**：冒烟前先确认端口无残留监听进程。
+
+### 7. Swagger UI 默认走外网 CDN，离线/沙箱环境 /docs 空白
+
+- **现象**：`/docs` 返回 HTTP 200 但页面全白（`<div id="swagger-ui">` 为空）。
+- **根因**：FastAPI 默认 `/docs` 从 `cdn.jsdelivr.net` 加载 `swagger-ui-bundle.js` / `swagger-ui.css`；在 WorkBuddy 预览面板（沙箱）、内网、离线环境访问不了外网 CDN，JS 拉不到 → 页面空白。（本机浏览器有外网时正常。）
+- **修复**：新增**完全自包含、零外网依赖**的离线文档页 `app/static/apidocs.html`（内嵌 CSS/JS，仅 fetch 同源 `/openapi.json` 渲染），路由 `/apiview` 直接返回；支持按方法着色、参数表、搜索、"试一试"发请求。
+- **教训**：面向演示 / 内网交付的 API 文档，优先用自托管 UI 资源，别依赖公共 CDN——也顺带避免 CDN 故障或网络隔离导致的不可用。
+
+### 8. 前端仪表盘图表依赖外网 CDN 且用硬编码假数据
+
+- **现象**：仪表盘（原 `/` 首页）打开后所有图表区域空白；且即便图表库能加载，展示的也是写死的假数据（如"今日查询趋势" `[5,2,15...]`、"卡券面值分布" `[35,25,25,15]`），与数据库真实数据完全不符。
+- **根因**：① `index.html` 第 7 行用 `<script src="https://cdn.jsdelivr.net/npm/chart.js">` 加载 Chart.js；离线 / 沙箱 / 内网环境拉不到 CDN，图表库缺失 → 全部空白（与第 7 条 Swagger 同一类坑）。② 6 个图表的 `data` 数组都是前端写死的 mock 值，后端 `/api/dashboard/` 当时只返回卡片汇总，没给图表维度数据。
+- **修复**：① 删掉 chart.js CDN，在 `index.html` 内联一个轻量 `Chart` 类（原生 canvas 画 line/bar/doughnut/radar），现有 `new Chart(...)` 调用一行不用改；② 扩展后端 `/api/dashboard/`（`app/api/dashboard.py` + `models.py` 的 `DashboardResponse`）新增 6 个真实数据字段（`order_amount_distribution` / `coupon_value_distribution` / `redemption_status` / `order_trend_14d` / `redemption_trend_14d` / `driver_activity`，均带默认值保持兼容）；前端改为 `fetch` 真实数据渲染；③ 语义纠偏：把"今日查询趋势"改为"订单量趋势（近14天）"、"查询状态分布"改为"卡券核销状态"、"司机活跃度"雷达图改为更贴合真实订单数的柱状图。
+- **教训**：前端图表库别依赖公共 CDN（同第 7 条）；**更关键**——BI/Dashboard 图表的"数据来源"必须是后端接口而非前端写死，否则演示时数字对不上、换数据还要改代码。给前端加图表字段时用"新字段 + 默认值"，避免破坏旧调用方。
+
+## 贡献指南
+
+1. Fork 项目
+2. 创建功能分支 (`git checkout -b feature/AmazingFeature`)
+3. 提交更改 (`git commit -m 'Add some AmazingFeature'`)
+4. 推送到分支 (`git push origin feature/AmazingFeature`)
+5. 创建 Pull Request
+
+## 许可证
+
+MIT License - 详见 [LICENSE](LICENSE) 文件

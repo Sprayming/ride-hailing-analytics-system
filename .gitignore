@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.env
+venv/
+.venv/
+data/*.db
+data/*.sqlite
+
+# 个人面试准备文档，不进公开仓库
+student.md
+面试追问坑清单.md
