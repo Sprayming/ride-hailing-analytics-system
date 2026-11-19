@@ -188,34 +188,44 @@ def generate_sql(question: str) -> tuple[str, str]:
 
 **要点**：`generate_sql` 做的是「prompt 工程 + 文本解析」。难点在第 ② 步：LLM 返回是自由文本（SQL 混着解释），必须用「以 `SELECT` 开头进入 SQL 区、反引号行跳过」这个**启发式规则**把 SQL 抠出来。这就是为什么系统提示里强调「返回格式：SQL + 解释」——靠格式约定换可解析性。
 
-### 1.5 SQL 执行与安全 `app/nlsql/sql_executor.py`
+### 1.5 SQL 执行与安全 `app/nlsql/sql_guard.py` + `app/nlsql/sql_executor.py`
+
+> v0.8.0 起，安全判定从「关键词黑名单」换成了「AST 白名单」。黑名单挡不住
+> `ATTACH DATABASE`、`SELECT load_extension()`、`SELECT * FROM users` 这三类语句，
+> 详见 README『踩坑记录 #9』。
 
 ```python
-def validate_sql(sql: str) -> bool:
-    sql_upper = sql.strip().upper()
-    if not sql_upper.startswith("SELECT"):          # ① 必须是 SELECT
-        return False
-    forbidden = ["INTO", "INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "TRUNCATE", "CREATE"]
-    for kw in forbidden:
-        pattern = r"\b" + kw + r"\b"                 # ② 禁止写操作/ DDL 关键词
-        if re.search(pattern, sql_upper):
-            return False
-    return True
+# app/nlsql/sql_guard.py
+def guard_sql(sql: str, *, max_rows: int = 200) -> GuardResult:
+    statements = [s for s in sqlglot.parse(sql, read="sqlite") if s is not None]
+    if len(statements) != 1:                          # ① 只允许单条语句
+        return GuardResult(ok=False, reason="multiple_statements")
 
-def run_sql(sql: str) -> tuple[list[dict], list[str]]:
-    if not validate_sql(sql):                        # ③ 执行前再卡一道
-        return [], []
-    try:
-        rows, columns = execute_sql(sql)             # → app.db.connection.execute_sql
-        return rows, columns
-    except Exception as e:
-        logger.error("SQL execution failed: {}", e)
-        return [], []
+    node = statements[0]
+    if not _is_read_only_query(node):                 # ② 根节点只读（SELECT / UNION）
+        return GuardResult(ok=False, reason="not_select")
+
+    for table in node.find_all(exp.Table):            # ③ 表名白名单
+        if table.name.lower() not in allowed_tables() and table.name not in _cte_names(node):
+            return GuardResult(ok=False, reason="table_not_allowed")
+
+    node = _apply_limit(node, max_rows)               # ④ 强制 LIMIT
+    return GuardResult(ok=True, sql=node.sql(dialect="sqlite"))
 ```
 
-**要点**：这是**第二道 SQL 安全闸**（第一道是 `validators` 的输入校验）。`validate_sql` 用「白名单前缀 SELECT + 黑名单关键词」双保险，即使 LLM 被诱导生成 `DROP TABLE`，也会被拦在 `execute_sql` 之前。**两道防线缺一不可**：前端 `SQLInjectionMiddleware` 防注入型输入，这里防「合法输入但危险 SQL」。
+```python
+# app/nlsql/sql_executor.py
+def run_sql(sql: str) -> tuple[list[dict], list[str]]:
+    result = check_sql(sql)                           # 闸门：纯函数，不碰库
+    if not result.ok:
+        logger.warning("SQL 被安全闸门拒绝 [{}]: {}", result.reason, result.detail)
+        return [], []
+    return execute_readonly_sql(result.sql, ...)      # 只读连接 + 超时 + 行数上限
+```
 
-`execute_sql`（`app/db/connection.py`）：
+**要点**：判定与执行彻底分开。`sql_guard` 是纯函数（好测、可复用），`execute_readonly_sql` 是兜底——连接用 `file:...?mode=ro` + `PRAGMA query_only=ON` 打开，就算闸门被绕过也写不进去；`set_progress_handler` 每 1000 条 VM 指令检查一次截止时间，笛卡尔积会在 5 秒被打断。
+
+`execute_sql`（`app/db/connection.py`，内部固定 SQL 用，不走闸门）：
 
 ```python
 def execute_sql(sql: str) -> tuple[list[dict], list[str]]:

@@ -140,6 +140,7 @@
 - **查询历史**：自动保存查询记录，支持搜索、收藏、分页
 - **数据导出**：支持CSV和JSON格式导出
 - **性能优化**：查询缓存、异步任务、内存LRU淘汰
+- **查询安全护栏**：sqlglot AST 白名单（单语句 / 仅 SELECT / 表白名单 / 危险函数拒绝）+ 只读连接 + 强制 LIMIT + 查询超时
 - **安全防护**：JWT认证、SQL注入防护、速率限制、输入验证
 
 ## 数据模型
@@ -151,6 +152,14 @@
 - **redemptions** — 核销记录（卡券、订单、核销时间等）
 
 ## 快速开始
+
+### 最简单：macOS / Linux 一键启动
+
+```bash
+./start-mac.sh
+```
+
+首次运行会自动建 `.venv`、装依赖、生成示例数据，然后起在 http://127.0.0.1:8001/ 。
 
 ### 方式一：本地开发
 
@@ -342,7 +351,8 @@ ride-hailing-analytics-system/
 │   │   └── validators.py        # 输入验证
 │   ├── nlsql/                   # 自然语言转SQL
 │   │   ├── schema_parser.py     # 数据库Schema解析
-│   │   ├── sql_executor.py      # SQL执行与校验
+│   │   ├── sql_guard.py         # AST 白名单安全闸门（单语句/SELECT/表白名单/LIMIT）
+│   │   ├── sql_executor.py      # SQL 校验与只读执行
 │   │   └── sql_generator.py     # LLM生成SQL
 │   ├── analysis/                # 数据分析
 │   │   ├── interpreter.py       # LLM数据解读
@@ -380,15 +390,17 @@ ride-hailing-analytics-system/
 │   └── nl2sql/                  # NL2SQL 评测集（22条 gold SQL）
 │       ├── evaluation_set.json  # 中文问题 + gold SQL + 结果断言
 │       └── run_eval.py          # 执行准确率评测脚本
-├── tests/                       # 测试代码（66个测试）
+├── tests/                       # 测试代码（89个测试）
 │   ├── conftest.py              # pytest fixtures
 │   ├── test_api.py              # API测试
 │   ├── test_config.py           # 配置测试
 │   ├── test_models.py           # 模型测试
 │   ├── test_nlsql.py            # SQL生成测试
 │   ├── test_security.py         # 安全测试
+│   ├── test_sql_guard.py        # AST 闸门 + 只读执行测试
 │   └── test_nl2sql_eval.py      # 评测集真实DB端到端测试（22条）
 ├── Dockerfile                   # Docker镜像配置
+├── start-mac.sh                 # macOS / Linux 一键启动（建环境 + 生成数据 + 起服务）
 ├── docker-compose.yml           # Docker Compose（5服务）
 ├── nginx.conf                   # Nginx反向代理配置
 ├── pytest.ini                   # pytest配置
@@ -410,7 +422,7 @@ services:
 
 ## 测试
 
-项目包含 **66 个测试用例**（44 原有 + 22 评测），覆盖核心模块：
+项目包含 **89 个测试用例**（44 原有 + 22 评测 + 23 查询安全护栏），覆盖核心模块：
 
 | 测试文件 | 测试数 | 覆盖模块 |
 |----------|--------|----------|
@@ -418,7 +430,8 @@ services:
 | test_models.py | 10 | Pydantic数据模型 |
 | test_nlsql.py | 15 | SQL生成、Schema解析、SQL安全校验 |
 | test_api.py | 7 | API接口（mock测试） |
-| test_security.py | 9 | SQL注入攻击、输入验证 |
+| test_security.py | 13 | SQL注入攻击、ATTACH/PRAGMA/load_extension、输入验证 |
+| test_sql_guard.py | 19 | AST 白名单判定、只读连接、行数上限、超时中断 |
 | test_nl2sql_eval.py | 22 | NL2SQL 评测集**真实 DB 端到端执行**（项目内唯一走真实 SQLite 的集成测试） |
 
 ```bash
@@ -582,6 +595,15 @@ pytest tests/test_nl2sql_eval.py
 - **真实 NL2SQL 端到端执行准确率：15/22 = 68.2%**（2026-08-16 用 `.env` 配置的 `deepseek-v4-pro` 真实调用跑通，`--with-llm`；gold SQL 校验 100% 通过）。逐维度命中率与未命中归因、后续改进见下方「更新日志 → v0.7.0」。若放宽"仅比对核心指标列"的评测口径，语义准确率约 19/22 ≈ 86%。
 
 ## 更新日志
+
+### v0.8.0 (2026-11-19) — 查询安全从黑名单换成 AST 白名单
+
+- 新增 `app/nlsql/sql_guard.py`：`sqlglot` 解析 AST 后判定，五条规则——单语句、根节点只读（SELECT / SELECT 组成的 UNION）、表名白名单、危险函数拒绝、强制 LIMIT。
+- 重写 `app/db/connection.py`：新增 `get_readonly_connection`（`mode=ro` + `PRAGMA query_only`）与 `execute_readonly_sql`（progress handler 实现 5 秒超时、结果行数上限）。
+- 重写 `app/nlsql/sql_executor.py`：`run_sql` 变成「闸门 → 只读执行」，被拒时记原因码并返回空结果，调用方零改动。
+- 新增 `tests/test_sql_guard.py`（19 条）并扩充 `tests/test_security.py`（9 → 13 条）；测试总数 **66 → 89**，全绿。
+- 补齐 `requirements.txt` 缺失依赖：`sqlglot` / `python-jose[cryptography]` / `passlib` / `email-validator`（此前按 requirements 装完仍跑不起认证模块）。
+- 启动脚本：删除写死 Windows 路径的 `.bat`，新增 `start-mac.sh`（自动建 venv、装依赖、生成数据、起服务）。
 
 ### v0.7.0 (2026-08-16) — NL2SQL 真实执行准确率评测
 
@@ -892,6 +914,21 @@ pytest tests/test_nl2sql_eval.py
 - **根因**：① `index.html` 第 7 行用 `<script src="https://cdn.jsdelivr.net/npm/chart.js">` 加载 Chart.js；离线 / 沙箱 / 内网环境拉不到 CDN，图表库缺失 → 全部空白（与第 7 条 Swagger 同一类坑）。② 6 个图表的 `data` 数组都是前端写死的 mock 值，后端 `/api/dashboard/` 当时只返回卡片汇总，没给图表维度数据。
 - **修复**：① 删掉 chart.js CDN，在 `index.html` 内联一个轻量 `Chart` 类（原生 canvas 画 line/bar/doughnut/radar），现有 `new Chart(...)` 调用一行不用改；② 扩展后端 `/api/dashboard/`（`app/api/dashboard.py` + `models.py` 的 `DashboardResponse`）新增 6 个真实数据字段（`order_amount_distribution` / `coupon_value_distribution` / `redemption_status` / `order_trend_14d` / `redemption_trend_14d` / `driver_activity`，均带默认值保持兼容）；前端改为 `fetch` 真实数据渲染；③ 语义纠偏：把"今日查询趋势"改为"订单量趋势（近14天）"、"查询状态分布"改为"卡券核销状态"、"司机活跃度"雷达图改为更贴合真实订单数的柱状图。
 - **教训**：前端图表库别依赖公共 CDN（同第 7 条）；**更关键**——BI/Dashboard 图表的"数据来源"必须是后端接口而非前端写死，否则演示时数字对不上、换数据还要改代码。给前端加图表字段时用"新字段 + 默认值"，避免破坏旧调用方。
+
+### 9. 关键词黑名单挡不住 ATTACH 和 load_extension
+
+- **现象**：`validate_sql` 的规则是「必须以 SELECT 开头 + 不含 INSERT/UPDATE/DELETE/DROP/ALTER/TRUNCATE/CREATE」。看起来安全，但我拿几条 SQL 试了下，全部放行：
+  - `ATTACH DATABASE '/Users/x/.ssh/id_rsa' AS k` —— 不含任何黑名单词，能读写宿主文件
+  - `SELECT load_extension('/tmp/evil')` —— 能加载任意动态库
+  - `SELECT * FROM users` —— 黑名单只关心动词，不关心你读哪张表
+  - `SELECT * FROM orders` —— 没有 LIMIT，在客户的库上能把连接池拖死
+- **根因**：黑名单是「枚举坏东西」，漏一个就是一个洞；SQL 的语法空间远大于关键词列表。而且 `SELECT * FROM drivers; DROP TABLE drivers;` 这种拼接，只要前一条以 SELECT 开头就能过第一道判断。
+- **修复**（`app/nlsql/sql_guard.py`，三层）：
+  1. **AST 白名单**：`sqlglot` 解析后判定——单语句、根节点必须是 SELECT（或 SELECT 组成的 UNION）、表名在库表白名单内、`load_extension` 等危险函数直接拒；无 LIMIT 自动补、超上限压到 200。
+  2. **只读连接**：查询走 `file:...?mode=ro` + `PRAGMA query_only=ON`，即使闸门被绕过，数据库层面也写不进去。
+  3. **超时中断**：`set_progress_handler` 每 1000 条 VM 指令检查一次截止时间，笛卡尔积一类无界查询 5 秒被打断。
+- **代价**：`users` 表（独立库）现在查不了，跨库查询全部拒绝——这是有意的，NL2SQL 只该读业务库。
+- **教训**：安全判定要写在**结构**上（AST / 类型 / 权限），不要写在**字符串**上（关键词 / 正则）。字符串永远能被绕过，结构不能。
 
 ## 贡献指南
 
