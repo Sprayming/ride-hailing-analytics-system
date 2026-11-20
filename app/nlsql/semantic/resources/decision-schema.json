@@ -1,0 +1,59 @@
+{
+  "type": "object",
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": ["query", "clarify", "reject"]
+    },
+    "reason": { "type": "string" },
+    "missing_fields": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "plan": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "metric": {
+              "type": ["string", "null"],
+              "enum": ["gmv", "order_count", "avg_order_amount", "coupon_issued", "redemption_rate", "active_drivers", null]
+            },
+            "start": { "type": ["string", "null"] },
+            "end": { "type": ["string", "null"] },
+            "dimension": {
+              "type": "string",
+              "enum": ["none", "day", "month", "city"]
+            },
+            "city": { "type": ["string", "null"] },
+            "end_inclusive": { "type": "boolean" }
+          },
+          "required": ["metric", "start", "end", "dimension", "city", "end_inclusive"],
+          "additionalProperties": false
+        },
+        { "type": "null" }
+      ]
+    },
+    "tables": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "message": { "type": "integer" },
+            "quote": { "type": "string" }
+          },
+          "required": ["message", "quote"],
+          "additionalProperties": false
+        }
+      }
+    }
+  },
+  "required": ["status", "reason", "missing_fields", "plan", "tables", "evidence"],
+  "additionalProperties": false
+}

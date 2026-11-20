@@ -1,0 +1,213 @@
+{
+  "models": {
+    "orders": {
+      "table": "orders",
+      "grain": "一行一笔订单",
+      "time": "order_time",
+      "key": "id"
+    },
+    "coupons": {
+      "table": "coupons",
+      "grain": "一行一张已发放的卡券",
+      "time": "issued_at",
+      "key": "id"
+    },
+    "drivers": {
+      "table": "drivers",
+      "grain": "一行一位司机",
+      "key": "id"
+    },
+    "coupon_types": {
+      "table": "coupon_types",
+      "grain": "一行一种券模板",
+      "key": "id"
+    },
+    "redemptions": {
+      "table": "redemptions",
+      "grain": "一行一次核销",
+      "time": "redeemed_at",
+      "key": "id"
+    }
+  },
+  "relationships": [
+    "orders.driver_id → drivers.id",
+    "orders.coupon_id → coupons.id",
+    "coupons.coupon_type_id → coupon_types.id",
+    "coupons.driver_id → drivers.id",
+    "redemptions.coupon_id → coupons.id",
+    "redemptions.order_id → orders.id"
+  ],
+  "metrics": {
+    "gmv": {
+      "name": "成交额",
+      "aliases": [
+        "GMV",
+        "流水",
+        "销售额",
+        "成交金额",
+        "营收",
+        "交易额"
+      ],
+      "description": "已完成订单的订单金额合计，按订单时间归属；取消与退款订单不计入",
+      "dimensions": [
+        "none",
+        "day",
+        "month",
+        "city"
+      ],
+      "tables": [
+        "orders"
+      ],
+      "source": "orders o",
+      "timeColumn": "o.order_time",
+      "condition": "o.status = 'completed'",
+      "expression": "SUM(o.order_amount)",
+      "joins": {
+        "city": "JOIN drivers d ON d.id = o.driver_id"
+      },
+      "format": "money"
+    },
+    "order_count": {
+      "name": "订单量",
+      "aliases": [
+        "单量",
+        "订单数",
+        "多少单",
+        "完成单量"
+      ],
+      "description": "已完成订单的去重笔数，按订单时间归属",
+      "dimensions": [
+        "none",
+        "day",
+        "month",
+        "city"
+      ],
+      "tables": [
+        "orders"
+      ],
+      "source": "orders o",
+      "timeColumn": "o.order_time",
+      "condition": "o.status = 'completed'",
+      "expression": "COUNT(DISTINCT o.id)",
+      "joins": {
+        "city": "JOIN drivers d ON d.id = o.driver_id"
+      },
+      "format": "count"
+    },
+    "avg_order_amount": {
+      "name": "客单价",
+      "aliases": [
+        "平均订单金额",
+        "单均价",
+        "每单收入"
+      ],
+      "description": "已完成订单金额的平均值，按订单时间归属",
+      "dimensions": [
+        "none",
+        "day",
+        "month",
+        "city"
+      ],
+      "tables": [
+        "orders"
+      ],
+      "source": "orders o",
+      "timeColumn": "o.order_time",
+      "condition": "o.status = 'completed'",
+      "expression": "ROUND(AVG(o.order_amount), 2)",
+      "joins": {
+        "city": "JOIN drivers d ON d.id = o.driver_id"
+      },
+      "format": "money"
+    },
+    "redemption_rate": {
+      "name": "核销率",
+      "aliases": [
+        "券核销率",
+        "卡券核销率"
+      ],
+      "description": "已核销券数占已发放券数的比例（发放口径）；按发券时间归属",
+      "dimensions": [
+        "none",
+        "day",
+        "month",
+        "city"
+      ],
+      "tables": [
+        "coupons"
+      ],
+      "source": "coupons c",
+      "timeColumn": "c.issued_at",
+      "condition": "1 = 1",
+      "expression": "ROUND(SUM(CASE WHEN c.status = 'used' THEN 1.0 ELSE 0 END) / COUNT(c.id), 4)",
+      "joins": {
+        "city": "JOIN drivers d ON d.id = c.driver_id"
+      },
+      "format": "percent"
+    },
+    "active_drivers": {
+      "name": "活跃司机数",
+      "aliases": [
+        "出车司机数",
+        "接单司机数",
+        "司机数"
+      ],
+      "description": "区间内有已完成订单的去重司机数，按订单时间归属",
+      "dimensions": [
+        "none",
+        "day",
+        "month",
+        "city"
+      ],
+      "tables": [
+        "orders"
+      ],
+      "source": "orders o",
+      "timeColumn": "o.order_time",
+      "condition": "o.status = 'completed'",
+      "expression": "COUNT(DISTINCT o.driver_id)",
+      "joins": {
+        "city": "JOIN drivers d ON d.id = o.driver_id"
+      },
+      "format": "count"
+    },
+    "coupon_issued": {
+      "name": "发券量",
+      "aliases": [
+        "发券数",
+        "发放量",
+        "券发放数"
+      ],
+      "description": "区间内发放的卡券张数，按发券时间归属",
+      "dimensions": [
+        "none",
+        "day",
+        "month",
+        "city"
+      ],
+      "tables": [
+        "coupons"
+      ],
+      "source": "coupons c",
+      "timeColumn": "c.issued_at",
+      "condition": "1 = 1",
+      "expression": "COUNT(c.id)",
+      "joins": {
+        "city": "JOIN drivers d ON d.id = c.driver_id"
+      },
+      "format": "count"
+    }
+  },
+  "ambiguousTerms": {
+    "核销率": "默认发放口径：已核销券数 / 已发放券数。领取口径（分母为已领取券）与结算口径（分母为已完成订单）需用户明确说明。",
+    "单量": "默认指已完成订单，不含取消与退款。",
+    "销售额": "默认指已完成订单实付金额，不扣补贴成本。",
+    "活跃": "默认指区间内有已完成订单，不按登录或在线时长统计。"
+  },
+  "dimensionDefinitions": {
+    "none": "不分组，整个区间返回一个数",
+    "day": "按自然日分组",
+    "month": "按自然月分组",
+    "city": "按司机所属城市分组"
+  }
+}

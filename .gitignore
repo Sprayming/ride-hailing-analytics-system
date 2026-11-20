@@ -12,3 +12,6 @@ eval/nl2sql/reports/
 # 个人面试准备文档，不进公开仓库
 student.md
 面试追问坑清单.md
+
+# 语义会话 checkpoint（运行时产物）
+data/nlsql_sessions.db*

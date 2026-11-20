@@ -115,12 +115,37 @@
 | **前端** | HTML/CSS/JS（零外网依赖，原生Canvas图表） | 单页应用：顶部问答搜索框 + 数据仪表盘（`index.html`），离线可用 |
 | **后端** | FastAPI + Uvicorn | 高性能异步Python Web框架 |
 | **AI引擎** | DeepSeek LLM | 可替换为OpenAI/本地模型 |
-| **Agent框架** | 多Agent协作 | 4个Agent自主决策、消息传递、共享记忆 |
+| **Agent框架** | 多Agent协作 / LangGraph | 4个Agent协作；语义查询走 LangGraph 状态机 + checkpoint |
 | **数据库** | SQLite (开发) / MySQL (生产) | 双数据库支持 |
 | **缓存** | 内存缓存 (LRU + TTL) | 查询结果缓存，10分钟过期 |
 | **监控** | Prometheus + Grafana | 指标采集 + 可视化仪表盘 |
 | **认证** | JWT + API Key | 双认证方式 |
 | **部署** | Docker + Nginx | 容器化部署，反向代理 |
+
+### 语义 NL2SQL：受控计划 + 人工确认
+
+原链路是「模型直接写 SQL → 闸门校验 → 执行」。语义链路换了个前提：**模型不写 SQL，只填计划**。
+
+```
+用户问题
+  → planner        模型读指标目录，输出 {status, plan, evidence}
+  → plan_validation 程序校验：指标/维度存在、日期 1~366 天、原话依据可核验
+  → human_feedback  挂起，等用户确认或澄清点选（LangGraph interrupt）
+  → sql_execute     编译器用目录里的表达式拼参数化 SQL，只读执行
+```
+
+四条硬规则：
+
+1. **指标表达式只来自目录** [`semantic-model.json`](app/nlsql/semantic/resources/semantic-model.json)，模型看不到物理 schema，也碰不到 SQL 文本；
+2. **所有用户值都走 `?` 绑定**，日期与城市永不拼接；
+3. **每个结论都要有原话依据**：模型给出 `evidence.quote`，程序校验它真的出现在对应消息里，对不上就澄清；
+4. **执行节点只接受 approved**，确认卡没点之前不会碰数据库。
+
+当前目录包含 6 个指标：成交额、订单量、客单价、发券量、核销率、活跃司机数，支持 none / day / month / city 四种粒度。
+
+能力边界同样显式：多指标、比率（除已定义口径）、排序、金额门槛一律 reject；"核销率"未说明口径时澄清，不替用户选。
+
+> 与 `/api/query` 并存：探索性问句走自由 SQL 链路，对口径有要求的问句走语义链路。
 
 ## 系统特性
 
@@ -245,6 +270,26 @@
 | POST | /api/auth/api-key | 创建API密钥 |
 | POST | /api/auth/change-password | 修改密码 |
 
+### 语义查询API（受控计划 + 人审）
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | `/api/nlsql/session` | 新建会话，返回确认卡 / 澄清卡 / 拒绝 |
+| GET | `/api/nlsql/session/{id}` | 读取会话状态 |
+| POST | `/api/nlsql/session/{id}/message` | 补充一句话，重新规划 |
+| POST | `/api/nlsql/session/{id}/choice` | 点选补齐缺失字段 |
+| POST | `/api/nlsql/session/{id}/confirm` | 确认计划并执行（唯一查库动作） |
+| POST | `/api/nlsql/session/{id}/regenerate` | 计划不对，让模型重来 |
+
+```bash
+curl -X POST localhost:8000/api/nlsql/session -H 'Content-Type: application/json' \
+  -d '{"question":"2026年11月上海的GMV"}'
+# → {"stage":"confirm","decision":{"plan":{...}},"reason":"..."}
+
+curl -X POST localhost:8000/api/nlsql/session/<id>/confirm
+# → {"stage":"done","rows":[[7294.46]],"sql":"SELECT SUM(o.order_amount) ..."}
+```
+
 ### 数据分析API
 
 | 方法 | 路径 | 说明 |
@@ -353,7 +398,16 @@ ride-hailing-analytics-system/
 │   │   ├── schema_parser.py     # 数据库Schema解析
 │   │   ├── sql_guard.py         # AST 白名单安全闸门（单语句/SELECT/表白名单/LIMIT）
 │   │   ├── sql_executor.py      # SQL 校验与只读执行
-│   │   └── sql_generator.py     # LLM生成SQL
+│   │   ├── sql_generator.py     # LLM生成SQL（自由链路）
+│   │   └── semantic/            # 语义链路：受控计划 + 人审
+│   │       ├── resources/       # 指标目录 / policy / 输出 Schema
+│   │       ├── catalog.py       # 指标目录（模型唯一事实来源）
+│   │       ├── plan_contract.py # 计划归一化与校验
+│   │       ├── query_rules.py   # 决策校验 + 原话依据 + 澄清点选
+│   │       ├── compiler.py      # 计划 → 参数化 SQL
+│   │       ├── executor.py      # 只读执行（超时 + 行数上限）
+│   │       ├── planner.py       # 模型调用与结构化输出
+│   │       └── workflow.py      # LangGraph 状态机 + checkpoint
 │   ├── analysis/                # 数据分析
 │   │   ├── interpreter.py       # LLM数据解读
 │   │   └── recommender.py       # LLM运营建议
@@ -390,7 +444,7 @@ ride-hailing-analytics-system/
 │   └── nl2sql/                  # NL2SQL 评测集（22条 gold SQL）
 │       ├── evaluation_set.json  # 中文问题 + gold SQL + 结果断言
 │       └── run_eval.py          # 执行准确率评测脚本
-├── tests/                       # 测试代码（89个测试）
+├── tests/                       # 测试代码（111个测试）
 │   ├── conftest.py              # pytest fixtures
 │   ├── test_api.py              # API测试
 │   ├── test_config.py           # 配置测试
@@ -422,7 +476,7 @@ services:
 
 ## 测试
 
-项目包含 **89 个测试用例**（44 原有 + 22 评测 + 23 查询安全护栏），覆盖核心模块：
+项目包含 **111 个测试用例**（44 原有 + 22 评测 + 23 查询安全护栏 + 22 语义层契约），覆盖核心模块：
 
 | 测试文件 | 测试数 | 覆盖模块 |
 |----------|--------|----------|

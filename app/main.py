@@ -66,6 +66,13 @@ app.include_router(query.router)
 app.include_router(dashboard.router)
 app.include_router(monitoring_router)
 
+# 语义 NL2SQL 路由：受控计划 + 人工确认（失败不影响主链路）
+try:
+    from app.api import nlsql
+    app.include_router(nlsql.router)
+except ImportError as exc:
+    logger.warning("语义 NL2SQL 路由未启用: {}", exc)
+
 # 查询历史路由（可选，根据需求启用）
 try:
     from app.api import history
