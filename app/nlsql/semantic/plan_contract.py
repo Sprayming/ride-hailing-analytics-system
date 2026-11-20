@@ -55,7 +55,7 @@ def validate(plan: Plan, catalog: Catalog = CATALOG) -> None:
 
     if plan.city is not None and not str(plan.city).strip():
         raise ValueError("城市筛选不能为空")
-    if plan.city and "city" not in (metric.get("joins") or {}):
+    if plan.city and "city" not in (metric.get("dimensionJoins") or {}):
         raise ValueError("该指标不支持按城市筛选")
 
     snapshot = metric.get("snapshotDate")
@@ -64,9 +64,12 @@ def validate(plan: Plan, catalog: Catalog = CATALOG) -> None:
 
 
 def required(plan: Plan, catalog: Catalog = CATALOG) -> Set[str]:
-    """计划必需的业务表；城市分组或城市筛选都要带上 drivers。"""
+    """计划必需的业务表；分组和城市筛选涉及的维度表都要带上。"""
     metric = catalog.metric(plan.metric)
     tables = set(metric.get("tables", []) if metric else [])
-    if plan.dimension == "city" or plan.city:
-        tables.add("drivers")
+    dimension_tables = (metric or {}).get("dimensionTables") or {}
+    if plan.dimension in dimension_tables:
+        tables.add(dimension_tables[plan.dimension])
+    if plan.city and "city" in dimension_tables:
+        tables.add(dimension_tables["city"])
     return tables

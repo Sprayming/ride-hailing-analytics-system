@@ -30,14 +30,21 @@ def compile_plan(plan: Plan, catalog: Catalog = CATALOG) -> Sql:
     time_column = metric["timeColumn"]
     params: list = [plan.start, plan.end]
 
-    uses_city = plan.dimension == "city" or bool(plan.city)
-    joins = (metric.get("joins") or {}).get("city", "") if uses_city else ""
+    dimension_joins = metric.get("dimensionJoins") or {}
+    group_map = metric.get("groups") or {}
 
-    group = {
-        "day": f"strftime('%Y-%m-%d', {time_column})",
-        "month": f"strftime('%Y-%m', {time_column})",
-        "city": "d.city",
-    }.get(plan.dimension)
+    # 分组需要的关联表与城市筛选的关联表可能不是同一张，全部拼上
+    joins = []
+    if plan.dimension in dimension_joins:
+        joins.append(dimension_joins[plan.dimension])
+    if plan.city and plan.dimension != "city" and "city" in dimension_joins:
+        joins.append(dimension_joins["city"])
+
+    group = group_map.get(plan.dimension)
+    if group is None and plan.dimension == "day":
+        group = f"strftime('%Y-%m-%d', {time_column})"
+    if group is None and plan.dimension == "month":
+        group = f"strftime('%Y-%m', {time_column})"
 
     where = f"{metric['condition']} AND {time_column} >= ? AND {time_column} < ?"
     if plan.city:
@@ -46,7 +53,7 @@ def compile_plan(plan: Plan, catalog: Catalog = CATALOG) -> Sql:
 
     select = f"{group} AS dimension, " if group else ""
     grouping = " GROUP BY dimension ORDER BY dimension" if group else ""
-    from_clause = f"{source} {joins}".strip()
+    from_clause = " ".join([source] + [item for item in joins if item]).strip()
 
     text = f"SELECT {select}{value} AS value FROM {from_clause} WHERE {where}{grouping} LIMIT {LIMIT_WITH_PROBE}"
     return Sql(text=text, params=params)

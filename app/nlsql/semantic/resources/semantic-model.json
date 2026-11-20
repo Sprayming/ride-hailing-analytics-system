@@ -46,14 +46,16 @@
         "销售额",
         "成交金额",
         "营收",
-        "交易额"
+        "交易额",
+        "总金额"
       ],
       "description": "已完成订单的订单金额合计，按订单时间归属；取消与退款订单不计入",
       "dimensions": [
         "none",
         "day",
         "month",
-        "city"
+        "city",
+        "driver_level"
       ],
       "tables": [
         "orders"
@@ -62,8 +64,17 @@
       "timeColumn": "o.order_time",
       "condition": "o.status = 'completed'",
       "expression": "SUM(o.order_amount)",
-      "joins": {
-        "city": "JOIN drivers d ON d.id = o.driver_id"
+      "groups": {
+        "city": "d.city",
+        "driver_level": "d.driver_level"
+      },
+      "dimensionJoins": {
+        "city": "JOIN drivers d ON d.id = o.driver_id",
+        "driver_level": "JOIN drivers d ON d.id = o.driver_id"
+      },
+      "dimensionTables": {
+        "city": "drivers",
+        "driver_level": "drivers"
       },
       "format": "money"
     },
@@ -73,14 +84,16 @@
         "单量",
         "订单数",
         "多少单",
-        "完成单量"
+        "完成单量",
+        "总订单数"
       ],
       "description": "已完成订单的去重笔数，按订单时间归属",
       "dimensions": [
         "none",
         "day",
         "month",
-        "city"
+        "city",
+        "driver_level"
       ],
       "tables": [
         "orders"
@@ -89,8 +102,17 @@
       "timeColumn": "o.order_time",
       "condition": "o.status = 'completed'",
       "expression": "COUNT(DISTINCT o.id)",
-      "joins": {
-        "city": "JOIN drivers d ON d.id = o.driver_id"
+      "groups": {
+        "city": "d.city",
+        "driver_level": "d.driver_level"
+      },
+      "dimensionJoins": {
+        "city": "JOIN drivers d ON d.id = o.driver_id",
+        "driver_level": "JOIN drivers d ON d.id = o.driver_id"
+      },
+      "dimensionTables": {
+        "city": "drivers",
+        "driver_level": "drivers"
       },
       "format": "count"
     },
@@ -99,14 +121,16 @@
       "aliases": [
         "平均订单金额",
         "单均价",
-        "每单收入"
+        "每单收入",
+        "平均金额"
       ],
       "description": "已完成订单金额的平均值，按订单时间归属",
       "dimensions": [
         "none",
         "day",
         "month",
-        "city"
+        "city",
+        "driver_level"
       ],
       "tables": [
         "orders"
@@ -115,10 +139,93 @@
       "timeColumn": "o.order_time",
       "condition": "o.status = 'completed'",
       "expression": "ROUND(AVG(o.order_amount), 2)",
-      "joins": {
-        "city": "JOIN drivers d ON d.id = o.driver_id"
+      "groups": {
+        "city": "d.city",
+        "driver_level": "d.driver_level"
+      },
+      "dimensionJoins": {
+        "city": "JOIN drivers d ON d.id = o.driver_id",
+        "driver_level": "JOIN drivers d ON d.id = o.driver_id"
+      },
+      "dimensionTables": {
+        "city": "drivers",
+        "driver_level": "drivers"
       },
       "format": "money"
+    },
+    "coupon_issued": {
+      "name": "发券量",
+      "aliases": [
+        "发券数",
+        "发放量",
+        "券发放数",
+        "发放数量"
+      ],
+      "description": "区间内发放的卡券张数，按发券时间归属",
+      "dimensions": [
+        "none",
+        "day",
+        "month",
+        "city",
+        "coupon_type"
+      ],
+      "tables": [
+        "coupons"
+      ],
+      "source": "coupons c",
+      "timeColumn": "c.issued_at",
+      "condition": "1 = 1",
+      "expression": "COUNT(c.id)",
+      "groups": {
+        "city": "d.city",
+        "coupon_type": "ct.name"
+      },
+      "dimensionJoins": {
+        "city": "JOIN drivers d ON d.id = c.driver_id",
+        "coupon_type": "JOIN coupon_types ct ON ct.id = c.coupon_type_id"
+      },
+      "dimensionTables": {
+        "city": "drivers",
+        "coupon_type": "coupon_types"
+      },
+      "format": "count"
+    },
+    "coupon_used": {
+      "name": "核销数",
+      "aliases": [
+        "已核销张数",
+        "核销量",
+        "用券数",
+        "使用张数"
+      ],
+      "description": "状态为已使用的卡券张数；按券类型统计时保留核销为 0 的类型",
+      "dimensions": [
+        "none",
+        "day",
+        "month",
+        "city",
+        "coupon_type"
+      ],
+      "tables": [
+        "coupons"
+      ],
+      "source": "coupons c",
+      "timeColumn": "c.issued_at",
+      "condition": "1 = 1",
+      "expression": "SUM(CASE WHEN c.status = 'used' THEN 1 ELSE 0 END)",
+      "groups": {
+        "city": "d.city",
+        "coupon_type": "ct.name"
+      },
+      "dimensionJoins": {
+        "city": "JOIN drivers d ON d.id = c.driver_id",
+        "coupon_type": "JOIN coupon_types ct ON ct.id = c.coupon_type_id"
+      },
+      "dimensionTables": {
+        "city": "drivers",
+        "coupon_type": "coupon_types"
+      },
+      "format": "count"
     },
     "redemption_rate": {
       "name": "核销率",
@@ -131,7 +238,8 @@
         "none",
         "day",
         "month",
-        "city"
+        "city",
+        "coupon_type"
       ],
       "tables": [
         "coupons"
@@ -140,8 +248,17 @@
       "timeColumn": "c.issued_at",
       "condition": "1 = 1",
       "expression": "ROUND(SUM(CASE WHEN c.status = 'used' THEN 1.0 ELSE 0 END) / COUNT(c.id), 4)",
-      "joins": {
-        "city": "JOIN drivers d ON d.id = c.driver_id"
+      "groups": {
+        "city": "d.city",
+        "coupon_type": "ct.name"
+      },
+      "dimensionJoins": {
+        "city": "JOIN drivers d ON d.id = c.driver_id",
+        "coupon_type": "JOIN coupon_types ct ON ct.id = c.coupon_type_id"
+      },
+      "dimensionTables": {
+        "city": "drivers",
+        "coupon_type": "coupon_types"
       },
       "format": "percent"
     },
@@ -157,7 +274,8 @@
         "none",
         "day",
         "month",
-        "city"
+        "city",
+        "driver_level"
       ],
       "tables": [
         "orders"
@@ -166,34 +284,17 @@
       "timeColumn": "o.order_time",
       "condition": "o.status = 'completed'",
       "expression": "COUNT(DISTINCT o.driver_id)",
-      "joins": {
-        "city": "JOIN drivers d ON d.id = o.driver_id"
+      "groups": {
+        "city": "d.city",
+        "driver_level": "d.driver_level"
       },
-      "format": "count"
-    },
-    "coupon_issued": {
-      "name": "发券量",
-      "aliases": [
-        "发券数",
-        "发放量",
-        "券发放数"
-      ],
-      "description": "区间内发放的卡券张数，按发券时间归属",
-      "dimensions": [
-        "none",
-        "day",
-        "month",
-        "city"
-      ],
-      "tables": [
-        "coupons"
-      ],
-      "source": "coupons c",
-      "timeColumn": "c.issued_at",
-      "condition": "1 = 1",
-      "expression": "COUNT(c.id)",
-      "joins": {
-        "city": "JOIN drivers d ON d.id = c.driver_id"
+      "dimensionJoins": {
+        "city": "JOIN drivers d ON d.id = o.driver_id",
+        "driver_level": "JOIN drivers d ON d.id = o.driver_id"
+      },
+      "dimensionTables": {
+        "city": "drivers",
+        "driver_level": "drivers"
       },
       "format": "count"
     }
@@ -208,6 +309,8 @@
     "none": "不分组，整个区间返回一个数",
     "day": "按自然日分组",
     "month": "按自然月分组",
-    "city": "按司机所属城市分组"
+    "city": "按司机所属城市分组",
+    "coupon_type": "按卡券类型分组（仅卡券类指标支持）",
+    "driver_level": "按司机等级分组（仅订单类指标支持）"
   }
 }

@@ -1,0 +1,698 @@
+{
+  "generated_at": "2026-11-20T14:07:00",
+  "mode": "gold_only",
+  "model": null,
+  "dataset": {
+    "name": "ride_nl2sql",
+    "version": "v1",
+    "sha256": "38ca064c09e1",
+    "cases": 22,
+    "seed": 42
+  },
+  "metrics": {
+    "gold_pass_rate": 1.0,
+    "execution_accuracy": null,
+    "semantic_coverage": 0.5909090909090909,
+    "semantic_accuracy": 1.0,
+    "semantic_definition_gap": 9,
+    "semantic_gap_cases": [
+      "Q01",
+      "Q02",
+      "Q03",
+      "Q08",
+      "Q09",
+      "Q10",
+      "Q16",
+      "Q17",
+      "Q21"
+    ]
+  },
+  "semantic_cases": [
+    {
+      "case_id": "Q01",
+      "route": "semantic",
+      "hit": false,
+      "expect": "definition_gap",
+      "note": "gold 统计全部状态，语义层默认只看已完成订单",
+      "semantic_rows": [
+        [
+          675
+        ]
+      ],
+      "gold_rows": [
+        [
+          800
+        ]
+      ]
+    },
+    {
+      "case_id": "Q02",
+      "route": "semantic",
+      "hit": false,
+      "expect": "definition_gap",
+      "note": "gold 统计全部订单金额，语义层默认只看已完成订单",
+      "semantic_rows": [
+        [
+          40781.66
+        ]
+      ],
+      "gold_rows": [
+        [
+          48577.71
+        ]
+      ]
+    },
+    {
+      "case_id": "Q03",
+      "route": "semantic",
+      "hit": false,
+      "expect": "definition_gap",
+      "note": "gold 统计全部订单，语义层默认只看已完成订单",
+      "semantic_rows": [
+        [
+          60.42
+        ]
+      ],
+      "gold_rows": [
+        [
+          60.72
+        ]
+      ]
+    },
+    {
+      "case_id": "Q04",
+      "route": "freeform",
+      "hit": false,
+      "expect": "match",
+      "note": ""
+    },
+    {
+      "case_id": "Q05",
+      "route": "semantic",
+      "hit": true,
+      "expect": "match",
+      "note": "",
+      "semantic_rows": [
+        [
+          675
+        ]
+      ],
+      "gold_rows": [
+        [
+          675
+        ]
+      ]
+    },
+    {
+      "case_id": "Q06",
+      "route": "freeform",
+      "hit": false,
+      "expect": "match",
+      "note": ""
+    },
+    {
+      "case_id": "Q07",
+      "route": "freeform",
+      "hit": false,
+      "expect": "match",
+      "note": ""
+    },
+    {
+      "case_id": "Q08",
+      "route": "semantic",
+      "hit": false,
+      "expect": "definition_gap",
+      "note": "gold 统计全部状态，语义层默认只看已完成订单",
+      "semantic_rows": [
+        [
+          159
+        ]
+      ],
+      "gold_rows": [
+        [
+          205
+        ]
+      ]
+    },
+    {
+      "case_id": "Q09",
+      "route": "semantic",
+      "hit": false,
+      "expect": "definition_gap",
+      "note": "gold 统计全部状态，语义层默认只看已完成订单",
+      "semantic_rows": [
+        [
+          9237.75
+        ]
+      ],
+      "gold_rows": [
+        [
+          12301.39
+        ]
+      ]
+    },
+    {
+      "case_id": "Q10",
+      "route": "semantic",
+      "hit": false,
+      "expect": "definition_gap",
+      "note": "gold 统计全部订单，语义层默认只看已完成订单",
+      "semantic_rows": [
+        [
+          "上海",
+          190
+        ],
+        [
+          "北京",
+          188
+        ],
+        [
+          "广州",
+          18
+        ],
+        [
+          "成都",
+          78
+        ],
+        [
+          "杭州",
+          60
+        ],
+        [
+          "武汉",
+          33
+        ],
+        [
+          "深圳",
+          108
+        ]
+      ],
+      "gold_rows": [
+        [
+          "北京",
+          223
+        ],
+        [
+          "上海",
+          221
+        ],
+        [
+          "深圳",
+          130
+        ],
+        [
+          "成都",
+          94
+        ],
+        [
+          "杭州",
+          68
+        ],
+        [
+          "武汉",
+          41
+        ],
+        [
+          "广州",
+          23
+        ]
+      ]
+    },
+    {
+      "case_id": "Q11",
+      "route": "freeform",
+      "hit": false,
+      "expect": "match",
+      "note": ""
+    },
+    {
+      "case_id": "Q12",
+      "route": "semantic",
+      "hit": true,
+      "expect": "match",
+      "note": "",
+      "semantic_rows": [
+        [
+          "专属券",
+          29
+        ],
+        [
+          "会员券",
+          30
+        ],
+        [
+          "大额券",
+          56
+        ],
+        [
+          "折扣券",
+          89
+        ],
+        [
+          "新人券",
+          61
+        ],
+        [
+          "满减券",
+          97
+        ],
+        [
+          "节日券",
+          38
+        ]
+      ],
+      "gold_rows": [
+        [
+          "满减券",
+          97
+        ],
+        [
+          "折扣券",
+          89
+        ],
+        [
+          "新人券",
+          61
+        ],
+        [
+          "大额券",
+          56
+        ],
+        [
+          "节日券",
+          38
+        ],
+        [
+          "会员券",
+          30
+        ],
+        [
+          "专属券",
+          29
+        ]
+      ]
+    },
+    {
+      "case_id": "Q13",
+      "route": "semantic",
+      "hit": true,
+      "expect": "match",
+      "note": "",
+      "semantic_rows": [
+        [
+          "专属券",
+          1
+        ],
+        [
+          "会员券",
+          5
+        ],
+        [
+          "大额券",
+          1
+        ],
+        [
+          "折扣券",
+          6
+        ],
+        [
+          "新人券",
+          2
+        ],
+        [
+          "满减券",
+          7
+        ],
+        [
+          "节日券",
+          1
+        ]
+      ],
+      "gold_rows": [
+        [
+          "新人券",
+          2
+        ],
+        [
+          "满减券",
+          7
+        ],
+        [
+          "折扣券",
+          6
+        ],
+        [
+          "大额券",
+          1
+        ],
+        [
+          "节日券",
+          1
+        ],
+        [
+          "会员券",
+          5
+        ],
+        [
+          "专属券",
+          1
+        ]
+      ]
+    },
+    {
+      "case_id": "Q14",
+      "route": "freeform",
+      "hit": false,
+      "expect": "match",
+      "note": ""
+    },
+    {
+      "case_id": "Q15",
+      "route": "freeform",
+      "hit": false,
+      "expect": "match",
+      "note": ""
+    },
+    {
+      "case_id": "Q16",
+      "route": "semantic",
+      "hit": false,
+      "expect": "definition_gap",
+      "note": "gold 返回「券类型 + 发放数 + 核销数 + 百分比」四列，语义层只返回比率一列；口径一致、形态不同",
+      "semantic_rows": [
+        [
+          "专属券",
+          0.0345
+        ],
+        [
+          "会员券",
+          0.1667
+        ],
+        [
+          "大额券",
+          0.0179
+        ],
+        [
+          "折扣券",
+          0.0674
+        ],
+        [
+          "新人券",
+          0.0328
+        ],
+        [
+          "满减券",
+          0.0722
+        ],
+        [
+          "节日券",
+          0.0263
+        ]
+      ],
+      "gold_rows": [
+        [
+          "新人券",
+          61,
+          2,
+          3.28
+        ],
+        [
+          "满减券",
+          97,
+          7,
+          7.22
+        ],
+        [
+          "折扣券",
+          89,
+          6,
+          6.74
+        ],
+        [
+          "大额券",
+          56,
+          1,
+          1.79
+        ],
+        [
+          "节日券",
+          38,
+          1,
+          2.63
+        ],
+        [
+          "会员券",
+          30,
+          5,
+          16.67
+        ],
+        [
+          "专属券",
+          29,
+          1,
+          3.45
+        ]
+      ]
+    },
+    {
+      "case_id": "Q17",
+      "route": "semantic",
+      "hit": false,
+      "expect": "definition_gap",
+      "note": "gold 用百分数（5.5），语义层返回 0~1 比率（0.055）；同一口径的两种表达",
+      "semantic_rows": [
+        [
+          0.0575
+        ]
+      ],
+      "gold_rows": [
+        [
+          5.75
+        ]
+      ]
+    },
+    {
+      "case_id": "Q18",
+      "route": "freeform",
+      "hit": false,
+      "expect": "match",
+      "note": ""
+    },
+    {
+      "case_id": "Q19",
+      "route": "freeform",
+      "hit": false,
+      "expect": "match",
+      "note": ""
+    },
+    {
+      "case_id": "Q20",
+      "route": "freeform",
+      "hit": false,
+      "expect": "match",
+      "note": ""
+    },
+    {
+      "case_id": "Q21",
+      "route": "semantic",
+      "hit": false,
+      "expect": "definition_gap",
+      "note": "gold 统计全部订单，语义层默认只看已完成订单",
+      "semantic_rows": [
+        [
+          "新手",
+          55.21
+        ],
+        [
+          "普通",
+          61.69
+        ],
+        [
+          "资深",
+          61.0
+        ],
+        [
+          "金牌",
+          55.61
+        ],
+        [
+          "钻石",
+          60.21
+        ]
+      ],
+      "gold_rows": [
+        [
+          "新手",
+          58.2
+        ],
+        [
+          "普通",
+          60.96
+        ],
+        [
+          "资深",
+          61.23
+        ],
+        [
+          "金牌",
+          59.93
+        ],
+        [
+          "钻石",
+          61.35
+        ]
+      ]
+    },
+    {
+      "case_id": "Q22",
+      "route": "semantic",
+      "hit": true,
+      "expect": "match",
+      "note": "",
+      "semantic_rows": [
+        [
+          23
+        ]
+      ],
+      "gold_rows": [
+        [
+          23
+        ]
+      ]
+    }
+  ],
+  "cases": [
+    {
+      "case_id": "Q01",
+      "category": "single_table_aggregation",
+      "question": "订单总数是多少？",
+      "passed": true
+    },
+    {
+      "case_id": "Q02",
+      "category": "single_table_aggregation",
+      "question": "所有订单的总金额是多少？",
+      "passed": true
+    },
+    {
+      "case_id": "Q03",
+      "category": "single_table_aggregation",
+      "question": "平均订单金额是多少？",
+      "passed": true
+    },
+    {
+      "case_id": "Q04",
+      "category": "single_table_aggregation",
+      "question": "金额最高的那笔订单是多少？",
+      "passed": true
+    },
+    {
+      "case_id": "Q05",
+      "category": "filtering",
+      "question": "已完成的订单有多少单？",
+      "passed": true
+    },
+    {
+      "case_id": "Q06",
+      "category": "filtering",
+      "question": "已退款的订单有多少单？",
+      "passed": true
+    },
+    {
+      "case_id": "Q07",
+      "category": "filtering",
+      "question": "金额大于 100 元的订单有多少单？",
+      "passed": true
+    },
+    {
+      "case_id": "Q08",
+      "category": "time_filter",
+      "question": "最近 7 天的订单数量是多少？",
+      "passed": true
+    },
+    {
+      "case_id": "Q09",
+      "category": "time_filter",
+      "question": "最近 7 天的订单总金额是多少？",
+      "passed": true
+    },
+    {
+      "case_id": "Q10",
+      "category": "join",
+      "question": "各城市的订单总数分别是多少？",
+      "passed": true
+    },
+    {
+      "case_id": "Q11",
+      "category": "join",
+      "question": "各司机完成的订单数分别是多少（按司机名，取前 10）？",
+      "passed": true
+    },
+    {
+      "case_id": "Q12",
+      "category": "join",
+      "question": "各卡券类型一共发放了多少张？",
+      "passed": true
+    },
+    {
+      "case_id": "Q13",
+      "category": "join",
+      "question": "各卡券类型分别被核销了多少张？",
+      "passed": true
+    },
+    {
+      "case_id": "Q14",
+      "category": "topn",
+      "question": "按总订单金额排名，金额最高的前 5 名司机是谁？",
+      "passed": true
+    },
+    {
+      "case_id": "Q15",
+      "category": "topn",
+      "question": "发放数量最多的前 3 种卡券类型是什么？",
+      "passed": true
+    },
+    {
+      "case_id": "Q16",
+      "category": "redemption_rate",
+      "question": "各卡券类型的核销率（核销数 / 发放数）分别是多少？",
+      "passed": true
+    },
+    {
+      "case_id": "Q17",
+      "category": "redemption_rate",
+      "question": "整体卡券核销率是多少？",
+      "passed": true
+    },
+    {
+      "case_id": "Q18",
+      "category": "subquery",
+      "question": "金额高于平均订单金额的订单有多少单？",
+      "passed": true
+    },
+    {
+      "case_id": "Q19",
+      "category": "subquery",
+      "question": "核销率高于整体平均水平的卡券类型有哪些？",
+      "passed": true
+    },
+    {
+      "case_id": "Q20",
+      "category": "dimension",
+      "question": "各司机等级（新手/普通/资深/金牌/钻石）的司机数量分别是多少？",
+      "passed": true
+    },
+    {
+      "case_id": "Q21",
+      "category": "dimension",
+      "question": "各司机等级的平均订单金额分别是多少？",
+      "passed": true
+    },
+    {
+      "case_id": "Q22",
+      "category": "filtering",
+      "question": "状态为已使用（used）的卡券有多少张？",
+      "passed": true
+    }
+  ]
+}

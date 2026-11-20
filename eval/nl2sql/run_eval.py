@@ -96,6 +96,81 @@ def dataset_fingerprint(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()[:12]
 
 
+def normalize_rows(rows) -> list:
+    """把结果行转成可比较的形态：浮点保留 3 位，忽略行序。"""
+    normalized = []
+    for row in rows:
+        values = row.values() if isinstance(row, dict) else row
+        normalized.append(tuple(
+            round(value, 3) if isinstance(value, float) else value for value in values
+        ))
+    return sorted(normalized, key=repr)
+
+
+def evaluate_semantic_layer(cases: list, db_path: Path) -> list:
+    """逐条编译语义层计划，与 gold 结果比对。
+
+    这一层不调用模型，衡量的是「目录能否表达这道题」以及「口径是否与 gold 一致」。
+    与 gold 不一致时保留两边的值，用于区分实现缺陷与口径分歧。
+    """
+    from app.nlsql.semantic import compiler
+    from app.nlsql.semantic import executor as semantic_executor
+    from app.nlsql.semantic.types import Plan
+
+    print("=" * 64)
+    print("语义层覆盖评估（编译预期计划，不调模型）")
+    records = []
+    for case in cases:
+        route = case.get("route", "freeform")
+        record = {"case_id": case["id"], "route": route, "hit": False,
+                  "expect": case.get("semantic_expect", "match"),
+                  "note": case.get("semantic_note", "")}
+        if route != "semantic" or not case.get("expected_plan"):
+            records.append(record)
+            continue
+
+        gold_rows, _ = run_sql(db_path, case["gold_sql"])
+        try:
+            sql = compiler.compile_plan(Plan(**case["expected_plan"]))
+            rows, columns = semantic_executor.execute(sql.text, sql.params, db_path=db_path)
+        except Exception as exc:  # noqa: BLE001 —— 编译或执行失败都算未覆盖
+            record["error"] = str(exc)
+            records.append(record)
+            print(f"  [ERR ] {case['id']}: {exc}")
+            continue
+
+        record["hit"] = normalize_rows(gold_rows) == normalize_rows(rows)
+        record["semantic_rows"] = rows
+        record["gold_rows"] = [[value for value in row.values()] for row in gold_rows]
+        records.append(record)
+
+        mark = "HIT " if record["hit"] else "GAP "
+        print(f"  [{mark}] {case['id']}: {case['question']}")
+        if not record["hit"]:
+            print(f"         gold = {record['gold_rows'][:3]}")
+            print(f"         sema = {rows[:3]}")
+            if record["note"]:
+                print(f"         说明 = {record['note']}")
+
+    total = len(cases)
+    semantic_total = sum(1 for item in records if item["route"] == "semantic")
+    same_scale = [item for item in records if item["route"] == "semantic" and item["expect"] == "match"]
+    gaps = [item for item in records if item["route"] == "semantic" and item["expect"] == "definition_gap"]
+    hits = sum(1 for item in same_scale if item["hit"])
+    print("-" * 64)
+    print(f"语义层可表达: {semantic_total}/{total} = {semantic_total / total * 100:.1f}%")
+    if same_scale:
+        print(f"口径一致子集命中: {hits}/{len(same_scale)} = {hits / len(same_scale) * 100:.1f}%")
+    if gaps:
+        matched = sum(1 for item in gaps if item["hit"])
+        print(f"口径/形态分歧子集: {len(gaps)} 条（其中 {matched} 条数值恰好相同）")
+    unexpected = [item["case_id"] for item in same_scale if not item["hit"]]
+    if unexpected:
+        print(f"[WARN] 口径一致却未命中，需排查: {unexpected}")
+    print(f"需自由 SQL: {total - semantic_total}/{total}")
+    return records
+
+
 def write_report(path: Path, payload: dict) -> None:
     """写出机器可读报告，供 evalhub 等下游消费。"""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -154,6 +229,13 @@ def main():
     gold_rate = gold_pass / len(cases) * 100
     print("-" * 64)
     print(f"Gold SQL 校验通过率: {gold_pass}/{len(cases)} = {gold_rate:.1f}%")
+
+    # ---- 语义层覆盖评估（不调模型：直接编译预期计划） ----
+    semantic_records = evaluate_semantic_layer(cases, db_path)
+    semantic_cases = [item for item in semantic_records if item["route"] == "semantic"]
+    same_scale = [item for item in semantic_cases if item.get("expect") == "match"]
+    same_scale_hits = sum(1 for item in same_scale if item["hit"])
+    semantic_gaps = [item for item in semantic_cases if item.get("expect") == "definition_gap"]
 
     # ---- 可选：真实 NL2SQL 准确率 ----
     if args.with_llm:
@@ -234,8 +316,12 @@ def main():
             "metrics": {
                 "gold_pass_rate": gold_pass / len(cases) if cases else None,
                 "execution_accuracy": (match / len(cases)) if args.with_llm and cases else None,
-                "semantic_accuracy": None,
+                "semantic_coverage": (len(semantic_cases) / len(cases)) if cases else None,
+                "semantic_accuracy": (same_scale_hits / len(same_scale)) if same_scale else None,
+                "semantic_definition_gap": len(semantic_gaps),
+                "semantic_gap_cases": [item["case_id"] for item in semantic_gaps],
             },
+            "semantic_cases": semantic_records,
             "cases": llm_records if llm_records is not None else gold_records,
         }
         write_report(Path(args.json_out), payload)

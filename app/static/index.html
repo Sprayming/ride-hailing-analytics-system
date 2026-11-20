@@ -573,6 +573,14 @@
         .qa-chip:hover { border-color: var(--primary); color: var(--primary); background: #f5f3ff; }
         #hero-query-result { margin-top: 24px; text-align: left; }
 
+        .semantic-toggle { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; font-size: 13px; color: #666; }
+        .semantic-actions { display: flex; gap: 10px; margin-top: 12px; align-items: center; }
+        .semantic-actions input { flex: 1; padding: 10px; border: 1px solid #ddd; border-radius: 6px; }
+        .semantic-actions button { padding: 8px 16px; border: none; border-radius: 6px; background: #0d6efd; color: #fff; cursor: pointer; }
+        .semantic-actions button:hover { background: #0b5ed7; }
+        .plan-grid { display: grid; grid-template-columns: 64px 1fr; gap: 6px 12px; margin: 8px 0; font-size: 14px; }
+        .plan-reason { color: #555; font-size: 13px; }
+
         /* KPI 卡片 */
         .dashboard { gap: 18px; }
         .card {
@@ -704,8 +712,12 @@
         <div id="tab-query" class="tab-content">
             <div class="section">
                 <h2>🔍 智能查询</h2>
+                <label class="semantic-toggle">
+                    <input type="checkbox" id="semantic-mode" checked />
+                    语义模式：模型只填计划，确认后才执行（取消勾选走自由 SQL）
+                </label>
                 <div class="query-input">
-                    <input type="text" id="question-input" placeholder="请输入您的问题，例如：哪个价位的卡券核销率最高？" />
+                    <input type="text" id="question-input" placeholder="请输入您的问题，例如：2026年11月各城市的核销率" />
                     <button id="query-btn" onclick="submitQuery()">查询</button>
                 </div>
                 <div id="query-result"></div>
@@ -987,6 +999,130 @@
             }
         }
 
+        // ===== 语义模式：受控计划 + 人工确认 =====
+        let semanticSessionId = null;
+
+        const SEMANTIC_STAGE_LABEL = {
+            confirm: '待确认', clarify: '待补充', done: '已执行',
+            reject: '已拒绝', error: '执行失败', cancelled: '已取消'
+        };
+
+        function escapeHtml(text) {
+            return String(text ?? '').replace(/[&<>"']/g, ch => (
+                { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]
+            ));
+        }
+
+        async function semanticPost(path, body) {
+            const resp = await fetch(path, {
+                method: 'POST',
+                headers: body ? { 'Content-Type': 'application/json' } : undefined,
+                body: body ? JSON.stringify(body) : undefined
+            });
+            const data = await resp.json();
+            if (!resp.ok) throw new Error(data.detail || '请求失败');
+            return data;
+        }
+
+        async function semanticSubmit(question) {
+            const btn = document.getElementById('query-btn');
+            const box = document.getElementById('query-result');
+            btn.disabled = true;
+            btn.textContent = '规划中...';
+            box.innerHTML = '<div class="loading">正在生成受控计划...</div>';
+            try {
+                const data = await semanticPost('/api/nlsql/session', { question });
+                semanticSessionId = data.id;
+                renderSemantic(data);
+            } catch (error) {
+                box.innerHTML = `<div class="error">规划失败: ${escapeHtml(error.message)}</div>`;
+            } finally {
+                btn.disabled = false;
+                btn.textContent = '查询';
+            }
+        }
+
+        async function semanticReply(action) {
+            if (!semanticSessionId) return;
+            const box = document.getElementById('query-result');
+            box.innerHTML = '<div class="loading">处理中...</div>';
+            try {
+                renderSemantic(await semanticPost(`/api/nlsql/session/${semanticSessionId}/${action}`));
+            } catch (error) {
+                box.innerHTML = `<div class="error">${escapeHtml(error.message)}</div>`;
+            }
+        }
+
+        async function semanticFollowup() {
+            const input = document.getElementById('semantic-followup');
+            const text = (input ? input.value : '').trim();
+            if (!text) { alert('请补充说明'); return; }
+            const box = document.getElementById('query-result');
+            box.innerHTML = '<div class="loading">重新规划中...</div>';
+            try {
+                renderSemantic(await semanticPost(`/api/nlsql/session/${semanticSessionId}/message`, { text }));
+            } catch (error) {
+                box.innerHTML = `<div class="error">${escapeHtml(error.message)}</div>`;
+            }
+        }
+
+        function renderSemantic(session) {
+            const box = document.getElementById('query-result');
+            const plan = session.decision && session.decision.plan;
+            const label = SEMANTIC_STAGE_LABEL[session.stage] || session.stage;
+
+            let html = `<div class="result-card"><h4>🧭 受控计划 · ${label}</h4>`;
+            if (plan) {
+                html += `<div class="plan-grid">
+                    <span>指标</span><b>${escapeHtml(plan.metric || '待定')}</b>
+                    <span>时间</span><b>${escapeHtml(plan.start || '待定')} → ${escapeHtml(plan.end || '待定')}（排他上界）</b>
+                    <span>分组</span><b>${escapeHtml(plan.dimension)}${plan.city ? ' · ' + escapeHtml(plan.city) : ''}</b>
+                </div>`;
+            }
+            html += `<p class="plan-reason">${escapeHtml(session.reason || '')}</p></div>`;
+
+            if (session.stage === 'confirm') {
+                html += `<div class="semantic-actions">
+                    <button onclick="semanticReply('confirm')">确认并执行</button>
+                    <button onclick="semanticReply('regenerate')">重新规划</button>
+                    <button onclick="semanticReply('cancel')">取消</button>
+                </div>`;
+            } else if (session.stage === 'clarify') {
+                html += `<div class="result-card"><h4>❓ 需要补充</h4><p>${escapeHtml(session.reason || '')}</p></div>
+                <div class="semantic-actions">
+                    <input id="semantic-followup" placeholder="例如：按发放口径，2026 年 11 月" />
+                    <button onclick="semanticFollowup()">继续</button>
+                    <button onclick="semanticReply('cancel')">取消</button>
+                </div>`;
+            }
+
+            if (session.stage === 'done') {
+                html += renderSemanticRows(session);
+            }
+            box.innerHTML = html;
+        }
+
+        function renderSemanticRows(session) {
+            const rows = session.rows || [];
+            const cols = session.columns || [];
+            let html = `<div class="result-card"><h4>📋 查询结果 (${rows.length} 条)</h4>`;
+            if (rows.length && cols.length) {
+                html += '<div style="overflow-x: auto;"><table style="width: 100%; border-collapse: collapse; margin-top: 10px;"><thead><tr style="background:#f8f9fa;">';
+                html += cols.map(c => `<th style="padding:10px;text-align:left;border-bottom:2px solid #dee2e6;">${escapeHtml(c)}</th>`).join('');
+                html += '</tr></thead><tbody>';
+                html += rows.map(r => '<tr>' + r.map(v => `<td style="padding:8px 10px;border-bottom:1px solid #eee;">${escapeHtml(v)}</td>`).join('') + '</tr>').join('');
+                html += '</tbody></table></div>';
+            } else {
+                html += '<p>没有匹配的数据</p>';
+            }
+            html += '</div>';
+
+            html += `<div class="result-card"><h4>🔧 编译后的 SQL（参数已绑定）</h4>
+                <div class="sql-box">${escapeHtml(session.sql || '')}</div>
+                <p class="plan-reason">参数：${escapeHtml(JSON.stringify(session.params || []))} ｜ 耗时 ${session.elapsed_ms ?? 0} ms</p></div>`;
+            return html;
+        }
+
         // 提交查询
         async function submitQuery() {
             const questionInput = document.getElementById('question-input');
@@ -999,6 +1135,11 @@
                 return;
             }
             
+            if (document.getElementById('semantic-mode')?.checked) {
+                await semanticSubmit(question);
+                return;
+            }
+
             queryBtn.disabled = true;
             queryBtn.textContent = '查询中...';
             resultDiv.innerHTML = '<div class="loading">正在分析数据，请稍候...</div>';

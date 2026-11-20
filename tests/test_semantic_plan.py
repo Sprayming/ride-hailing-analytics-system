@@ -181,3 +181,51 @@ def test_choose_rejects_unknown_metric():
     session = make_session(["看看"], decision, stage="clarify")
     with pytest.raises(ValueError):
         query_rules.choose(session, Choice(metric="profit"))
+
+
+# ---------------- 维度扩展 ----------------
+
+def test_coupon_type_dimension_joins_coupon_types():
+    plan = Plan(
+        metric="redemption_rate",
+        start="2026-11-01",
+        end="2026-11-30",
+        dimension="coupon_type",
+        end_inclusive=True,
+    )
+    sql = compile_plan(plan)
+    assert "JOIN coupon_types ct ON ct.id = c.coupon_type_id" in sql.text
+    assert "ct.name AS dimension" in sql.text
+    assert "coupon_types" in plan_contract.required(plan)
+
+
+def test_driver_level_dimension_joins_drivers():
+    plan = Plan(
+        metric="avg_order_amount",
+        start="2026-11-01",
+        end="2026-11-30",
+        dimension="driver_level",
+        end_inclusive=True,
+    )
+    sql = compile_plan(plan)
+    assert "JOIN drivers d ON d.id = o.driver_id" in sql.text
+    assert "d.driver_level AS dimension" in sql.text
+
+
+def test_dimension_not_supported_by_metric_is_rejected():
+    plan = Plan(
+        metric="coupon_issued",
+        start="2026-11-01",
+        end="2026-11-30",
+        dimension="driver_level",
+        end_inclusive=True,
+    )
+    with pytest.raises(ValueError):
+        compile_plan(plan)
+
+
+def test_coupon_used_keeps_zero_rows():
+    """核销数用条件聚合而不是 WHERE 过滤，否则 0 核销的券类型会整行消失。"""
+    metric = CATALOG.metrics["coupon_used"]
+    assert metric["condition"] == "1 = 1"
+    assert "CASE WHEN c.status = 'used'" in metric["expression"]

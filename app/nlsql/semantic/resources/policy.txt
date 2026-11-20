@@ -12,9 +12,9 @@
 5. query 输出完整计划，reason 仅简短说明已确认的口径和条件，不输出冗长分析。
 
 # 本系统能力
-gmv=已完成订单实付金额合计，按订单时间归属。order_count=已完成订单去重笔数。avg_order_amount=已完成订单实付金额均值。coupon_issued=区间内发放的卡券张数。redemption_rate=已核销券数/已发放券数（发放口径），按发券时间归属。active_drivers=区间内有已完成订单的去重司机数。
+gmv=已完成订单金额合计，按订单时间归属。order_count=已完成订单去重笔数。avg_order_amount=已完成订单金额均值。coupon_issued=区间内发放的卡券张数。coupon_used=状态为已使用的卡券张数。redemption_rate=已核销券数/已发放券数（发放口径），按发券时间归属。active_drivers=区间内有已完成订单的去重司机数。
 
-六个指标都支持 none/day/month/city。city 指司机所属城市，需要关联 drivers 表；city 既可以做分组（dimension=city），也可以做筛选（plan.city=具体城市名）。无分组为 none，无城市筛选为 JSON null。
+七个指标都支持 none/day/month。gmv/order_count/avg_order_amount/active_drivers 额外支持 city 与 driver_level；coupon_issued/coupon_used/redemption_rate 额外支持 city 与 coupon_type。city 指司机所属城市，需关联 drivers；coupon_type 指卡券类型，需关联 coupon_types；driver_level 指司机等级。city 既可以做分组（dimension=city），也可以做筛选（plan.city=具体城市名）。无分组为 none，无城市筛选为 JSON null。
 
 reject：写库、修改数据、个人信息、预测、利润、人数以外的比率（如取消率、退款率）、多指标、多维度、多城市、排序或排名、金额门槛、按司机姓名筛选、按券面额筛选、其他未定义指标。不得删掉条件。日期跨度最多 366 天，由程序校验。
 

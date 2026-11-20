@@ -17,13 +17,13 @@
           "properties": {
             "metric": {
               "type": ["string", "null"],
-              "enum": ["gmv", "order_count", "avg_order_amount", "coupon_issued", "redemption_rate", "active_drivers", null]
+              "enum": ["gmv", "order_count", "avg_order_amount", "coupon_issued", "coupon_used", "redemption_rate", "active_drivers", null]
             },
             "start": { "type": ["string", "null"] },
             "end": { "type": ["string", "null"] },
             "dimension": {
               "type": "string",
-              "enum": ["none", "day", "month", "city"]
+              "enum": ["none", "day", "month", "city", "coupon_type", "driver_level"]
             },
             "city": { "type": ["string", "null"] },
             "end_inclusive": { "type": "boolean" }
