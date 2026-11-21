@@ -22,7 +22,7 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-import scripts.generate_data as gen  # noqa: E402
+from eval.nl2sql.run_eval import build_eval_db  # noqa: E402
 
 EVAL_FILE = ROOT / "eval" / "nl2sql" / "evaluation_set.json"
 SEED = 42
@@ -32,18 +32,9 @@ COUPONS = 400
 
 
 def _build_db(path: Path) -> None:
-    if path.exists():
-        path.unlink()
-    conn = sqlite3.connect(str(path))
-    schema = (ROOT / "data" / "schema_sqlite.sql").read_text(encoding="utf-8")
-    conn.executescript(schema)
-    gen.random.seed(SEED)
-    drivers = gen.generate_drivers(conn, DRIVERS)
-    gen.generate_coupon_types(conn)
-    coupons = gen.generate_coupons(conn, COUPONS, DRIVERS)
-    orders = gen.generate_orders(conn, ORDERS, drivers)
-    gen.generate_redemptions(conn, coupons, orders)
-    conn.close()
+    payload = json.loads(EVAL_FILE.read_text(encoding="utf-8"))
+    reference_time = payload["meta"]["repro"]["reference_time"]
+    build_eval_db(path, SEED, DRIVERS, ORDERS, COUPONS, reference_time)
 
 
 @pytest.fixture(scope="session")
@@ -87,3 +78,16 @@ def test_gold_sql(db_path: Path, case: dict) -> None:
         assert len(rows) >= 1, f"{case['id']} 期望多行，实际 {len(rows)} 行"
     else:
         raise AssertionError(f"未知 expect 类型: {case['expect']}")
+
+
+def test_seed_and_reference_time_reproduce_identical_content(tmp_path):
+    first = tmp_path / "first.db"
+    second = tmp_path / "second.db"
+    _build_db(first)
+    _build_db(second)
+
+    with sqlite3.connect(first) as conn:
+        first_dump = list(conn.iterdump())
+    with sqlite3.connect(second) as conn:
+        second_dump = list(conn.iterdump())
+    assert first_dump == second_dump

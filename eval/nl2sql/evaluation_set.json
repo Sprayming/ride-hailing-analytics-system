@@ -1,7 +1,7 @@
 {
   "meta": {
     "name": "网约车运营 NL2SQL 评测集",
-    "version": "v1",
+    "version": "v2",
     "description": "面向 ride-hailing-analytics-system 的 Text-to-SQL 评测集，用于量化 NL2SQL 准确率（execution accuracy）。所有 gold SQL 均基于真实 schema_sqlite.sql 列名编写，并在可复现种子库上通过校验。",
     "schema_tables": [
       "drivers(id, name, phone, city, register_date, driver_level, status)",
@@ -21,7 +21,8 @@
       "seed": 42,
       "drivers": 60,
       "orders": 800,
-      "coupons": 400
+      "coupons": 400,
+      "reference_time": "2026-11-20 12:00:00"
     },
     "expect_legend": {
       "scalar": "结果应为单行单列（如 COUNT/SUM/AVG 标量）",
@@ -137,7 +138,7 @@
       "id": "Q08",
       "category": "time_filter",
       "question": "最近 7 天的订单数量是多少？",
-      "gold_sql": "SELECT COUNT(*) AS recent_orders FROM orders WHERE order_time >= datetime('now', '-7 days')",
+      "gold_sql": "SELECT COUNT(*) AS recent_orders FROM orders WHERE order_time >= datetime('2026-11-20 12:00:00', 'start of day', '-6 days') AND order_time < datetime('2026-11-20 12:00:00', 'start of day', '+1 day')",
       "expect": "scalar",
       "route": "semantic",
       "expected_plan": {
@@ -155,7 +156,7 @@
       "id": "Q09",
       "category": "time_filter",
       "question": "最近 7 天的订单总金额是多少？",
-      "gold_sql": "SELECT ROUND(SUM(order_amount), 2) AS week_amount FROM orders WHERE order_time >= datetime('now', '-7 days')",
+      "gold_sql": "SELECT ROUND(SUM(order_amount), 2) AS week_amount FROM orders WHERE order_time >= datetime('2026-11-20 12:00:00', 'start of day', '-6 days') AND order_time < datetime('2026-11-20 12:00:00', 'start of day', '+1 day')",
       "expect": "scalar",
       "route": "semantic",
       "expected_plan": {
@@ -279,7 +280,7 @@
         "end_inclusive": true
       },
       "semantic_expect": "definition_gap",
-      "semantic_note": "gold 用百分数（5.5），语义层返回 0~1 比率（0.055）；同一口径的两种表达"
+      "semantic_note": "gold 用百分数，语义层返回 0~1 比率；同一口径的两种表达"
     },
     {
       "id": "Q18",

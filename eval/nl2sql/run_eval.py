@@ -33,33 +33,52 @@ sys.path.insert(0, str(ROOT))
 import scripts.generate_data as gen  # noqa: E402
 
 
-def build_eval_db(db_path: Path, seed: int | None, drivers: int, orders: int, coupons: int) -> None:
-    """用可复现种子生成独立评测库。
+def build_eval_db(
+    db_path: Path,
+    seed: int | None,
+    drivers: int,
+    orders: int,
+    coupons: int,
+    reference_time: str,
+) -> None:
+    """用固定随机种子和参考时间生成独立评测库。
 
-    采用 DROP + CREATE 而非删除文件，避免受沙箱安全删除策略限制，
-    同时保证每次运行都从干净 schema 开始（可复现）。
+    只冻结数据生成器里的时钟，不改业务库生成脚本；gold SQL 使用同一参考时间，
+    因此换日期、换机器重跑仍得到相同数据与相对时间窗口。
     """
+    frozen = datetime.strptime(reference_time, "%Y-%m-%d %H:%M:%S")
+
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return frozen if tz is None else frozen.replace(tzinfo=tz)
+
     conn = sqlite3.connect(str(db_path))
-    drop = (
-        "DROP TABLE IF EXISTS drivers; "
-        "DROP TABLE IF EXISTS coupon_types; "
-        "DROP TABLE IF EXISTS coupons; "
-        "DROP TABLE IF EXISTS orders; "
-        "DROP TABLE IF EXISTS redemptions;"
-    )
-    conn.executescript(drop)
-    schema = (ROOT / "data" / "schema_sqlite.sql").read_text(encoding="utf-8")
-    conn.executescript(schema)
+    original_datetime = gen.datetime
+    gen.datetime = FrozenDateTime
+    try:
+        drop = (
+            "DROP TABLE IF EXISTS drivers; "
+            "DROP TABLE IF EXISTS coupon_types; "
+            "DROP TABLE IF EXISTS coupons; "
+            "DROP TABLE IF EXISTS orders; "
+            "DROP TABLE IF EXISTS redemptions;"
+        )
+        conn.executescript(drop)
+        schema = (ROOT / "data" / "schema_sqlite.sql").read_text(encoding="utf-8")
+        conn.executescript(schema)
 
-    if seed is not None:
-        gen.random.seed(seed)
+        if seed is not None:
+            gen.random.seed(seed)
 
-    drivers_list = gen.generate_drivers(conn, drivers)
-    gen.generate_coupon_types(conn)
-    coupons_list = gen.generate_coupons(conn, coupons, drivers)
-    orders_list = gen.generate_orders(conn, orders, drivers_list)
-    gen.generate_redemptions(conn, coupons_list, orders_list)
-    conn.close()
+        drivers_list = gen.generate_drivers(conn, drivers)
+        gen.generate_coupon_types(conn)
+        coupons_list = gen.generate_coupons(conn, coupons, drivers)
+        orders_list = gen.generate_orders(conn, orders, drivers_list)
+        gen.generate_redemptions(conn, coupons_list, orders_list)
+    finally:
+        gen.datetime = original_datetime
+        conn.close()
 
 
 def run_sql(db_path: Path, sql: str):
@@ -197,12 +216,17 @@ def main():
 
     print("=" * 64)
     print("Step 1/2: 构建可复现评测库 ...")
-    build_eval_db(db_path, args.seed, args.drivers, args.orders, args.coupons)
-    print(f"  评测库: {db_path}")
-
     eval_payload = json.loads(eval_path.read_text(encoding="utf-8"))
     cases = eval_payload["cases"]
     evaluation_meta = eval_payload.get("meta", {})
+    repro = evaluation_meta.get("repro", {})
+    reference_time = repro["reference_time"]
+
+    build_eval_db(
+        db_path, args.seed, args.drivers, args.orders, args.coupons, reference_time
+    )
+    print(f"  评测库: {db_path}")
+    print(f"  参考时间: {reference_time}")
     print(f"  评测用例: {len(cases)} 条")
     print("=" * 64)
 
@@ -306,6 +330,13 @@ def main():
             "generated_at": datetime.now().isoformat(timespec="seconds"),
             "mode": "with_llm" if args.with_llm else "gold_only",
             "model": model_name,
+            "config": {
+                "seed": args.seed,
+                "drivers": args.drivers,
+                "orders": args.orders,
+                "coupons": args.coupons,
+                "reference_time": reference_time,
+            },
             "dataset": {
                 "name": "ride_nl2sql",
                 "version": (evaluation_meta.get("version") or "unknown"),
